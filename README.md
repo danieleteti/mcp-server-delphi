@@ -22,120 +22,94 @@
 
    - **MCP Protocol 2025-03-26** compliant
    - **Attribute-driven** tool/resource/prompt registration using RTTI
-   - **JSON-RPC 2.0** over HTTP transport
+   - **Dual transport**: Streamable HTTP and stdio (select via `--transport http|stdio`)
    - **Session management** with automatic cleanup
    - **Type-safe** parameter binding with automatic JSON schema generation
-   - **Multiple content types**: Text, Image (base64), Embedded Resources
+   - **Multiple content types**: Text, Image (base64), Audio (base64), Embedded Resources
    - **Fluent API** for building multi-content responses
+   - **Rich prompt messages**: Text, Image, and Embedded Resource content in prompts
    - **DMVCFramework integration** via `PublishObject` pattern
 
    ## Quick Start
 
-   ### 1. Create a Tool Provider
+   The fastest way to get started is to **copy a Quick Start sample** and customize it. Two projects are available — pick the one that fits your deployment:
 
-   ```pascal
-   unit MyToolsU;
+   | Project | Transport | Requires TaurusTLS | Use when |
+   |---------|-----------|-------------------|----------|
+   | [`samples/quickstart/`](samples/quickstart/) | HTTP + stdio | Yes | You want a network server that AI clients connect to via HTTP |
+   | [`samples/quickstart_stdio/`](samples/quickstart_stdio/) | stdio only | **No** | You want the AI client (e.g. Claude Desktop) to launch the server locally |
 
-   interface
+   Both projects share the **same provider units** in [`samples/shared/`](samples/shared/) — you write your tools, resources, and prompts once and both transports use them.
 
-   uses
-     MVCFramework.MCP.ToolProvider,
-     MVCFramework.MCP.Attributes;
+   ### 1. Copy and build
 
-   type
-     TMyTools = class(TMCPToolProvider)
-     public
-       [MCPTool('reverse_string', 'Reverses a string')]
-       function ReverseString(
-         [MCPParam('The string to reverse')] const Value: string
-       ): TMCPToolResult;
-
-       [MCPTool('string_length', 'Returns the length of a string')]
-       function StringLength(
-         [MCPParam('The string to measure')] const Value: string
-       ): TMCPToolResult;
-
-       [MCPTool('echo', 'Echoes back the input message')]
-       function Echo(
-         [MCPParam('The message to echo')] const Message: string
-       ): TMCPToolResult;
-     end;
-
-   implementation
-
-   uses
-     System.SysUtils, System.StrUtils, MVCFramework.MCP.Server;
-
-   function TMyTools.ReverseString(const Value: string): TMCPToolResult;
-   begin
-     Result := TMCPToolResult.Text(System.StrUtils.ReverseString(Value));
-   end;
-
-   function TMyTools.StringLength(const Value: string): TMCPToolResult;
-   begin
-     Result := TMCPToolResult.Text(IntToStr(Length(Value)));
-   end;
-
-   function TMyTools.Echo(const Message: string): TMCPToolResult;
-   begin
-     Result := TMCPToolResult.Text(Message);
-   end;
-
-   initialization
-     TMCPServer.Instance.RegisterToolProvider(TMyTools);
-
-   end.
+   ```
+   samples/
+   ├── shared/                      <-- ★ YOUR CODE: customize these files
+   │   ├── ToolProviderU.pas        <--   tools the AI can call
+   │   ├── ResourceProviderU.pas    <--   data the AI can read
+   │   └── PromptProviderU.pas      <--   reusable conversation templates
+   │
+   ├── quickstart/                  <-- HTTP + stdio project
+   │   ├── QuickStart.dpr/.dproj   <--   open .dproj in Delphi
+   │   ├── WebModuleU.pas/.dfm     <--   HTTP wiring (no changes needed)
+   │   └── bin/.env                <--   server port config
+   │
+   └── quickstart_stdio/            <-- stdio-only project (no TaurusTLS)
+       └── QuickStartStdio.dpr/.dproj
    ```
 
-   ### 2. Register and Run
+   Copy `samples/shared/` + the project folder you need. Open the `.dproj` in Delphi, make sure DMVCFramework and this repository's `sources/` folder are in your search path, then build and run.
 
-   Tool providers auto-register via their `initialization` section (see step 1). In the web module, just publish the MCP endpoint:
+   **HTTP project** — you should see:
 
-   ```pascal
-   uses
-     MVCFramework.MCP.Server;
-
-   procedure TMyWebModule.WebModuleCreate(Sender: TObject);
-   begin
-     fMVC := TMVCEngine.Create(Self,
-       procedure(Config: TMVCConfig)
-       begin
-         // ... your config ...
-       end);
-
-     // MCP session cleanup via DELETE (must be registered before PublishObject)
-     fMVC.AddController(TMCPSessionController);
-
-     // Publish the MCP endpoint using a factory function
-     fMVC.PublishObject(
-       function: TObject
-       begin
-         Result := TMCPServer.Instance.CreatePublishedEndpoint;
-       end, '/mcp');
-   end;
+   ```
+   MCP Server listening on http://localhost:8080/mcp
    ```
 
-   ### 3. Connect an AI Client
+   **stdio project** — the executable is ready to be launched by an AI client (no console output).
 
-   Build and run the sample application, then connect your favorite AI client. The MCP endpoint will be available at `http://localhost:8080/mcp` (default port).
+   ### 2. Customize
+
+   Every provider file in `shared/` is heavily commented and ready to be modified. The three files you care about are:
+
+   - **`ToolProviderU.pas`** — Add methods decorated with `[MCPTool]` to expose actions the AI can call (query a DB, call an API, perform calculations, etc.)
+   - **`ResourceProviderU.pas`** — Add methods decorated with `[MCPResource]` to expose data the AI can read (config, files, reports, etc.)
+   - **`PromptProviderU.pas`** — Add methods decorated with `[MCPPrompt]` to provide reusable conversation templates
+
+   Each provider auto-registers at startup via its `initialization` section — just add the unit to the `.dpr` `uses` clause and the MCP library discovers everything via RTTI.
+
+   ### 3. Connect an AI client
 
    #### 🤖 Claude Desktop
 
-   Edit your Claude Desktop config file:
-   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   Edit your config file (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+   **Streamable HTTP** (server is already running):
 
    ```json
    {
      "mcpServers": {
-       "my-dmvc-server": {
+       "my-server": {
          "url": "http://localhost:8080/mcp"
        }
      }
    }
    ```
 
-   Restart Claude Desktop — your tools will appear in the 🔨 menu.
+   **stdio** (Claude launches the server for you):
+
+   ```json
+   {
+     "mcpServers": {
+       "my-server": {
+         "command": "C:\\path\\to\\QuickStartStdio.exe"
+       }
+     }
+   }
+   ```
+
+   > 💡 If you use the HTTP+stdio project instead, add `"args": ["--transport", "stdio"]`.
 
    #### ♊ Google Gemini CLI
 
@@ -144,7 +118,7 @@
    ```json
    {
      "mcpServers": {
-       "my-dmvc-server": {
+       "my-server": {
          "url": "http://localhost:8080/mcp"
        }
      }
@@ -153,23 +127,8 @@
 
    #### 🧑‍💻 Claude Code (CLI)
 
-   Add to your project's `.mcp.json`:
-
-   ```json
-   {
-     "mcpServers": {
-       "my-dmvc-server": {
-         "type": "http",
-         "url": "http://localhost:8080/mcp"
-       }
-     }
-   }
-   ```
-
-   Or register it via the CLI:
-
    ```bash
-   claude mcp add --transport http my-dmvc-server http://localhost:8080/mcp
+   claude mcp add --transport http my-server http://localhost:8080/mcp
    ```
 
    #### 🦊 Continue (VS Code / JetBrains)
@@ -178,13 +137,11 @@
 
    ```yaml
    mcpServers:
-     - name: my-dmvc-server
+     - name: my-server
        url: http://localhost:8080/mcp
    ```
 
    #### 🔌 Any MCP-compatible Client
-
-   Point any client that supports the [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) to:
 
    ```
    POST http://<your-server>:8080/mcp
@@ -197,14 +154,20 @@
    ```
    ┌─────────────────────────────────────────────────────────────┐
    │                      Client (AI Assistant)                  │
-   └──────────────────────┬──────────────────────────────────────┘
-                          │ HTTP/JSON-RPC 2.0
-                          ▼
+   └──────────┬─────────────────────────────────┬────────────────┘
+              │ Streamable HTTP                  │ stdio
+              ▼                                  ▼
+   ┌──────────────────────────────┐  ┌──────────────────────────┐
+   │  TMCPEndpoint (PublishObject)│  │  TMCPStdioTransport      │
+   │  TMCPSessionController      │  │  (stdin/stdout JSON-RPC)  │
+   │  (POST/DELETE /mcp)         │  │                           │
+   └──────────────┬──────────────┘  └─────────────┬────────────┘
+                  │                                │
+                  └──────────┬─────────────────────┘
+                             ▼
    ┌─────────────────────────────────────────────────────────────┐
-   │  TMCPSessionController  │  TMCPEndpoint (PublishObject)     │
-   │  (DELETE /mcp)          │  (POST /mcp)                      │
-   └─────────────────────────┼───────────────────────────────────┘
-                             │
+   │  TMCPRequestHandler (transport-agnostic dispatch)           │
+   └─────────────────────────┬───────────────────────────────────┘
                              ▼
    ┌─────────────────────────────────────────────────────────────┐
    │  TMCPServer (Singleton)                                     │
@@ -229,6 +192,7 @@
    | `TMCPToolResult.Text(const AText: string)` | Returns text content |
    | `TMCPToolResult.Error(const AMessage: string)` | Returns error text with `isError=true` |
    | `TMCPToolResult.Image(const ABase64Data, AMimeType: string)` | Returns image content |
+   | `TMCPToolResult.Audio(const ABase64Data, AMimeType: string)` | Returns audio content |
    | `TMCPToolResult.Resource(AURI, AText, AMimeType)` | Returns embedded resource (text) |
    | `TMCPToolResult.ResourceBlob(AURI, ABase64Data, AMimeType)` | Returns embedded resource (blob) |
    | `TMCPToolResult.JSON(AJSON: TJDOJsonObject)` | Serializes JSON object to text |
@@ -292,9 +256,10 @@
    The server is fully tested with a dedicated test project and a comprehensive Python compliance test suite (20+ test cases).
 
    The test project (`tests/testproject/`) registers providers that exercise **every feature** of the library:
-   - **18 tools** covering all `TMCPToolResult` factory methods: `Text`, `Error`, `Image`, `JSON`, `FromValue`, `FromObject`, `FromCollection`, `FromStream`, `Resource`, and the fluent `AddText`/`AddImage`/`AddResource` builder API
+   - **18 tools** covering all `TMCPToolResult` factory methods: `Text`, `Error`, `Image`, `Audio`, `JSON`, `FromValue`, `FromObject`, `FromCollection`, `FromStream`, `Resource`, and the fluent `AddText`/`AddImage`/`AddResource` builder API
    - **3 resources** — text (`application/json`, `text/plain`) and blob (`image/png`)
    - **3 prompts** — with required/optional arguments and multi-message conversations
+   - **Conformance providers** — dedicated tools, resources, and prompts for MCP protocol conformance testing (text, image, audio, embedded resources, multi-content, error handling)
    - All parameter types: `string`, `Integer`, `Double`, `Boolean`, plus optional parameters
 
    To run the compliance tests against the test server:
@@ -314,6 +279,7 @@
    - JSON-RPC 2.0 specification
    - Session lifecycle (create, validate, delete, timeout)
    - Tool/Resource/Prompt execution and error handling
+   - All content types: text, image, audio, embedded resources
    - Concurrent sessions
    - HTTP method restrictions
    - Content type validation
@@ -322,16 +288,30 @@
 
    ```
    .
-   ├── Sources/                                    # Core library
-   │   ├── MVCFramework.MCP.Server.pas             # Server registry and endpoint
-   │   ├── MVCFramework.MCP.Attributes.pas         # Custom attributes
+   ├── sources/                                     # Core library
+   │   ├── MVCFramework.MCP.Server.pas              # Server registry and endpoint
+   │   ├── MVCFramework.MCP.RequestHandler.pas      # Transport-agnostic MCP dispatch
+   │   ├── MVCFramework.MCP.Stdio.pas               # stdio transport (stdin/stdout)
+   │   ├── MVCFramework.MCP.TransportConf.pas       # Early transport detection
+   │   ├── MVCFramework.MCP.Attributes.pas          # Custom attributes
    │   ├── MVCFramework.MCP.ToolProvider.pas        # Tool base class and results
    │   ├── MVCFramework.MCP.ResourceProvider.pas    # Resource base class
    │   ├── MVCFramework.MCP.PromptProvider.pas      # Prompt base class
    │   ├── MVCFramework.MCP.Session.pas             # Session management
    │   └── MVCFramework.MCP.Types.pas               # Protocol types and constants
-   ├── Sample/                                      # Minimal example application
-   │   ├── MCPServerSample.dpr                      # Console app entry point
+   ├── samples/
+   │   ├── shared/                                  # ★ Shared providers — customize these
+   │   │   ├── ToolProviderU.pas                    # Example tools
+   │   │   ├── ResourceProviderU.pas                # Example resources
+   │   │   └── PromptProviderU.pas                  # Example prompts
+   │   ├── quickstart/                              # HTTP + stdio project
+   │   │   ├── QuickStart.dpr/.dproj                # Console app (requires TaurusTLS)
+   │   │   ├── WebModuleU.pas/.dfm                  # HTTP wiring (no changes needed)
+   │   │   └── bin/.env                             # Server port configuration
+   │   └── quickstart_stdio/                        # stdio-only project (no TaurusTLS)
+   │       └── QuickStartStdio.dpr/.dproj           # Lightweight console app
+   ├── sample/                                      # Advanced example (with TLS)
+   │   ├── MCPServerSample.dpr                      # Console app (HTTP + stdio + TLS)
    │   ├── WebModuleU.pas                           # Web module setup
    │   ├── MyToolsU.pas                             # Example MCP tools
    │   └── bin/
@@ -339,10 +319,11 @@
    └── tests/
        ├── test_mcp_server.py                       # Python compliance test suite
        └── testproject/                             # Delphi test server
-           ├── MCPServerUnitTest.dpr                # Test server entry point
+           ├── MCPServerUnitTest.dpr                # Test server (HTTP + stdio)
            ├── MCPTestToolsU.pas                    # 18 tools covering all result types
            ├── MCPTestResourcesU.pas                # 3 resources (text + blob)
            ├── MCPTestPromptsU.pas                  # 3 prompts with arguments
+           ├── MCPConformanceProvidersU.pas         # Conformance test providers
            └── WebModuleU.pas                       # Test web module
    ```
 

@@ -80,3 +80,7 @@ __recovery/
 
 # Boss dependency manager vendor folder https://github.com/HashLoad/boss
 modules/
+/.claude/settings.local.json
+/tests/testproject/build_output.txt
+/tests/testproject/build.bat
+/**/__pycache__/

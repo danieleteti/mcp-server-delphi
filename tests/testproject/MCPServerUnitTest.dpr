@@ -43,6 +43,7 @@ uses
   MCPTestToolsU in 'MCPTestToolsU.pas',
   MCPTestResourcesU in 'MCPTestResourcesU.pas',
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
+  MCPConformanceProvidersU in 'MCPConformanceProvidersU.pas',
   WebModuleU in 'WebModuleU.pas' {MyWebModule: TWebModule},
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio;

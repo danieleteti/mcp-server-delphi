@@ -90,7 +90,8 @@ end;
 procedure TMCPRequestHandler.ValidateSession(const AMethod: string);
 begin
   if SameText(AMethod, 'initialize') or
-     SameText(AMethod, 'notifications/initialized') then
+     SameText(AMethod, 'notifications/initialized') or
+     SameText(AMethod, 'ping') then
     Exit;
 
   if FSessionId.IsEmpty or
@@ -108,6 +109,9 @@ var
 begin
   LMethod := ARequest.S['method'];
   LHasId := ARequest.Contains('id');
+
+  { Session validation: all methods except initialize/ping require a valid session }
+  ValidateSession(LMethod);
 
   { Extract params object if present }
   if ARequest.Contains('params') and (ARequest.Types['params'] = jdtObject) then

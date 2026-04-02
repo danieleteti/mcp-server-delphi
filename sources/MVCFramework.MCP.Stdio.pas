@@ -100,7 +100,12 @@ begin
       LHasId := LRequest.Contains('id');
 
       try
-        FHandler.ValidateSession(LRequest.S['method']);
+        LResponse := FHandler.HandleRequest(LRequest);
+        if LResponse <> nil then
+        begin
+          WriteLn(Output, LResponse.ToJSON(True));
+          Flush(Output);
+        end;
       except
         on E: EMCPSessionError do
         begin
@@ -111,7 +116,6 @@ begin
               LErrorResponse.S['jsonrpc'] := '2.0';
               LErrorResponse.O['error'].I['code'] := -32600;
               LErrorResponse.O['error'].S['message'] := E.Message;
-              { Copy id preserving type }
               case LRequest.Types['id'] of
                 jdtString:
                   LErrorResponse.S['id'] := LRequest.S['id'];
@@ -130,18 +134,7 @@ begin
           end
           else
             LogStderr('Session error on notification: ' + E.Message);
-          Continue;
         end;
-      end;
-
-      try
-        LResponse := FHandler.HandleRequest(LRequest);
-        if LResponse <> nil then
-        begin
-          WriteLn(Output, LResponse.ToJSON(True));
-          Flush(Output);
-        end;
-      except
         on E: Exception do
         begin
           if LHasId then

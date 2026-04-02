@@ -534,7 +534,8 @@ begin
   JSON.S[JSONRPC_METHOD] := LMethod.Replace('/', '');
 
   if not SameText(LMethod, 'initialize') and
-     not SameText(LMethod, 'notifications/initialized') then
+     not SameText(LMethod, 'notifications/initialized') and
+     not SameText(LMethod, 'ping') then
   begin
     FSessionId := Context.Request.Headers[MCP_SESSION_HEADER];
     FHandler.SessionId := FSessionId;

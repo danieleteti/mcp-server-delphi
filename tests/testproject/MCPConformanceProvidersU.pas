@@ -58,10 +58,10 @@ type
   TConformanceResources = class(TMCPResourceProvider)
   public
     [MCPResource('test://static-text', 'Static text resource for conformance testing', 'text/plain')]
-    function StaticText: TMCPResourceResult;
+    function StaticText(const URI: string): TMCPResourceResult;
 
     [MCPResource('test://static-binary', 'Static binary resource for conformance testing', 'image/png')]
-    function StaticBinary: TMCPResourceResult;
+    function StaticBinary(const URI: string): TMCPResourceResult;
   end;
 
   TConformancePrompts = class(TMCPPromptProvider)
@@ -129,15 +129,15 @@ end;
 
 { TConformanceResources }
 
-function TConformanceResources.StaticText: TMCPResourceResult;
+function TConformanceResources.StaticText(const URI: string): TMCPResourceResult;
 begin
-  Result := TMCPResourceResult.Text('test://static-text',
+  Result := TMCPResourceResult.Text(URI,
     'This is the content of the static text resource.', 'text/plain');
 end;
 
-function TConformanceResources.StaticBinary: TMCPResourceResult;
+function TConformanceResources.StaticBinary(const URI: string): TMCPResourceResult;
 begin
-  Result := TMCPResourceResult.Blob('test://static-binary',
+  Result := TMCPResourceResult.Blob(URI,
     RED_PNG_BASE64, 'image/png');
 end;
 

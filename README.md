@@ -4,6 +4,7 @@
 
 # MCP Server for DMVCFramework
 
+   [![Version](https://img.shields.io/badge/version-0.8.0-brightgreen.svg)](https://github.com/danieleteti/mcp-server-delphi)
    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
    [![Delphi](https://img.shields.io/badge/Delphi-11%2B-purple.svg)](https://www.embarcadero.com/products/delphi)
 

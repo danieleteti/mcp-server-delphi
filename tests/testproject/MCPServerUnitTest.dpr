@@ -40,6 +40,7 @@ uses
   IdHTTPWebBrokerBridge,
   TaurusTLS,
   MVCFramework.Signal,
+  MVCFramework.MCP.TransportConf, { MUST be before provider units to suppress stdout logging in stdio mode }
   MCPTestToolsU in 'MCPTestToolsU.pas',
   MCPTestResourcesU in 'MCPTestResourcesU.pas',
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
@@ -165,13 +166,18 @@ begin
   IsMultiThread := True;
   MVCSerializeNulls := True;
   MVCNameCaseDefault := TMVCNameCase.ncCamelCase;
-  UseConsoleLogger := True;
+
+  { Parse transport early: in stdio mode, console logger must be disabled
+    before any LogI calls to prevent log output on stdout }
+  LTransport := ParseTransport;
+  if LTransport = 'stdio' then
+    UseConsoleLogger := False
+  else
+    UseConsoleLogger := True;
   UseLoggerVerbosityLevel := TLogLevel.levNormal;
 
   TMCPServer.Instance.ServerName := 'MCPServerUnitTest';
   TMCPServer.Instance.ServerVersion := '1.0.0';
-
-  LTransport := ParseTransport;
 
   if LTransport = 'stdio' then
   begin

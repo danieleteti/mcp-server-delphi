@@ -43,6 +43,7 @@ uses
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio,
   MVCFramework.Signal,
+  MVCFramework.MCP.TransportConf, { MUST be before provider units to suppress stdout logging in stdio mode }
   MyToolsU in 'MyToolsU.pas',
   WebModuleU in 'WebModuleU.pas' {MyWebModule: TWebModule};
 
@@ -161,17 +162,21 @@ begin
   IsMultiThread := True;
   MVCSerializeNulls := True;
   MVCNameCaseDefault := TMVCNameCase.ncCamelCase;
-  UseConsoleLogger := True;
+
+  { Parse transport early: in stdio mode, console logger must be disabled
+    before any LogI calls to prevent log output on stdout }
+  LTransport := ParseTransport;
+  if LTransport = 'stdio' then
+    UseConsoleLogger := False
+  else
+    UseConsoleLogger := True;
   UseLoggerVerbosityLevel := TLogLevel.levNormal;
 
   TMCPServer.Instance.ServerName := 'DMVCFrameworkMCPServerSample';
   TMCPServer.Instance.ServerVersion := '1.0.0';
 
-  LTransport := ParseTransport;
-
   if LTransport = 'stdio' then
   begin
-    UseConsoleLogger := False;  // stdout is reserved for JSON-RPC
     try
       RunStdio;
     except

@@ -51,9 +51,8 @@
    │   ├── ResourceProviderU.pas    <--   data the AI can read
    │   └── PromptProviderU.pas      <--   reusable conversation templates
    │
-   ├── quickstart/                  <-- HTTP + stdio project
+   ├── quickstart/                  <-- HTTP + stdio project (Indy Direct backend)
    │   ├── QuickStart.dpr/.dproj   <--   open .dproj in Delphi
-   │   ├── WebModuleU.pas/.dfm     <--   HTTP wiring (no changes needed)
    │   └── bin/.env                <--   server port config
    │
    └── quickstart_stdio/            <-- stdio-only project (no TaurusTLS)
@@ -305,15 +304,13 @@
    │   │   ├── ToolProviderU.pas                    # Example tools
    │   │   ├── ResourceProviderU.pas                # Example resources
    │   │   └── PromptProviderU.pas                  # Example prompts
-   │   ├── quickstart/                              # HTTP + stdio project
-   │   │   ├── QuickStart.dpr/.dproj                # Console app (requires TaurusTLS)
-   │   │   ├── WebModuleU.pas/.dfm                  # HTTP wiring (no changes needed)
+   │   ├── quickstart/                              # HTTP + stdio project (Indy Direct)
+   │   │   ├── QuickStart.dpr/.dproj                # Console app
    │   │   └── bin/.env                             # Server port configuration
    │   └── quickstart_stdio/                        # stdio-only project (no TaurusTLS)
    │       └── QuickStartStdio.dpr/.dproj           # Lightweight console app
    ├── sample/                                      # Advanced example (with TLS)
-   │   ├── MCPServerSample.dpr                      # Console app (HTTP + stdio + TLS)
-   │   ├── WebModuleU.pas                           # Web module setup
+   │   ├── MCPServerSample.dpr                      # Console app (HTTP + stdio + HTTPS)
    │   ├── MyToolsU.pas                             # Example MCP tools
    │   └── bin/
    │       └── generate_certificates.bat            # Self-signed SSL cert generator
@@ -324,9 +321,17 @@
            ├── MCPTestToolsU.pas                    # 18 tools covering all result types
            ├── MCPTestResourcesU.pas                # 3 resources (text + blob)
            ├── MCPTestPromptsU.pas                  # 3 prompts with arguments
-           ├── MCPConformanceProvidersU.pas         # Conformance test providers
-           └── WebModuleU.pas                       # Test web module
+           └── MCPConformanceProvidersU.pas         # Conformance test providers
    ```
+
+   ## Server architecture
+
+   All HTTP/HTTPS transports run on DMVCFramework's **Indy Direct** backend
+   (`TMVCEngine.CreateForIndyDirect` + `TMVCServerFactory.CreateIndyDirect`).
+   No `TWebModule`, no WebBroker bridge: the engine dispatches requests
+   directly from `TIdHTTPServer`. HTTPS is opt-in via
+   `TaurusTLSIndyConfigurator` with `CertFile` / `KeyFile` /
+   `CertPassword` properties on the `IMVCServer`.
 
    ## Requirements
 

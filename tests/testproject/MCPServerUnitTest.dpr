@@ -28,102 +28,93 @@ program MCPServerUnitTest;
 
 uses
   System.SysUtils,
-  Web.ReqMulti,
-  Web.WebReq,
-  Web.WebBroker,
   MVCFramework,
   MVCFramework.Logger,
   MVCFramework.DotEnv,
   MVCFramework.Commons,
   MVCFramework.Serializer.Commons,
-  IdContext,
-  IdHTTPWebBrokerBridge,
-  TaurusTLS,
+  MVCFramework.Server.Intf,
+  MVCFramework.Server.Factory,
+  MVCFramework.Server.HTTPS.TaurusTLS,
   MVCFramework.Signal,
   MVCFramework.MCP.TransportConf, { MUST be before provider units to suppress stdout logging in stdio mode }
   MCPTestToolsU in 'MCPTestToolsU.pas',
   MCPTestResourcesU in 'MCPTestResourcesU.pas',
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
   MCPConformanceProvidersU in 'MCPConformanceProvidersU.pas',
-  WebModuleU in 'WebModuleU.pas' {MyWebModule: TWebModule},
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio;
 
 {$R *.res}
 
-type
-  TTLSHandler = class
-    procedure OnGetSSLPassword(aSender: TObject; var aPassword: String; const aIsWrite: Boolean; var aOk: Boolean);
-    procedure OnQuerySSLPort(aPort: Word; var vUseSSL: boolean);
-    procedure ConfigureTLS(aServer: TIdHTTPWebBrokerBridge);
-  end;
+// ---------------------------------------------------------------------------
+// BuildEngine: configures TMVCEngine for Indy Direct  the MCP endpoint
+// and the session controller are wired directly on the engine.
+// ---------------------------------------------------------------------------
+function BuildEngine: TMVCEngine;
+begin
+  Result := TMVCEngine.CreateForIndyDirect(
+    procedure(Config: TMVCConfig)
+    begin
+      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
+      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
+      Config[TMVCConfigKey.ExposeServerSignature] := 'false';
+    end);
 
-{ TTLSHandler }
+  Result.AddController(TMCPSessionController);
+  Result.PublishObject(
+    function: TObject
+    begin
+      Result := TMCPServer.Instance.CreatePublishedEndpoint;
+    end, '/mcp');
+end;
 
-procedure TTLSHandler.ConfigureTLS(aServer: TIdHTTPWebBrokerBridge);
+// ---------------------------------------------------------------------------
+// RunServer: Indy Direct backend with optional HTTPS via TaurusTLS.
+// ---------------------------------------------------------------------------
+procedure RunServer(APort: Integer);
 var
-  lTaurusTLSHandler: TTaurusTLSServerIOHandler;
+  LEngine: TMVCEngine;
+  LServer: IMVCServer;
+  LProtocol: string;
 begin
-  lTaurusTLSHandler := TTaurusTLSServerIOHandler.Create(aServer);
-  lTaurusTLSHandler.SSLOptions.Mode := sslmServer;
-  lTaurusTLSHandler.DefaultCert.PublicKey := dotEnv.Env('https.cert.cacert', 'certificates\localhost.crt');
-  lTaurusTLSHandler.DefaultCert.PrivateKey := dotEnv.Env('https.cert.privkey', 'certificates\localhost.key');
-  lTaurusTLSHandler.OnGetPassword := OnGetSSLPassword;
-  aServer.IOHandler := lTaurusTLSHandler;
-  aServer.OnQuerySSLPort := OnQuerySSLPort;
-end;
-
-procedure TTLSHandler.OnGetSSLPassword(aSender: TObject; var aPassword: String; const aIsWrite: Boolean; var aOk: Boolean);
-begin
-  aPassword := dotEnv.Env('https.cert.password', '');
-  aOk := True;
-end;
-
-procedure TTLSHandler.OnQuerySSLPort(aPort: Word; var vUseSSL: boolean);
-begin
-  vUseSSL := true;
-end;
-
-procedure RunServer(aPort: Integer);
-var
-  LServer: TIdHTTPWebBrokerBridge;
-  LSSLHandler: TTLSHandler;
-  LProtocol: String;
-begin
-  LProtocol := 'http';
-  LServer := TIdHTTPWebBrokerBridge.Create(nil);
+  LEngine := BuildEngine;
   try
-    LServer.OnParseAuthentication := TMVCParseAuthentication.OnParseAuthentication;
-    LServer.DefaultPort := APort;
+    LServer := TMVCServerFactory.CreateIndyDirect(LEngine);
     LServer.KeepAlive := dotEnv.Env('dmvc.indy.keep_alive', True);
     LServer.MaxConnections := dotEnv.Env('dmvc.webbroker.max_connections', 0);
     LServer.ListenQueue := dotEnv.Env('dmvc.indy.listen_queue', 500);
-    LSSLHandler := TTLSHandler.Create;
-    try
-      if dotEnv.Env('https.enabled', false) then
-      begin
-        LogI('HTTPS is enabled');
-        LSSLHandler.ConfigureTLS(LServer);
-        LProtocol := 'https';
-      end
-      else
-      begin
-        LogW('HTTPS is available but CURRENTLY NOT ENABLED');
-      end;
-      LServer.Active := True;
-      LogI('MCP Test Server listening on ' + LProtocol + '://localhost:' + APort.ToString + '/mcp');
-      LogI('Registered tools: ' + TMCPServer.Instance.Tools.Count.ToString);
-      LogI('Registered resources: ' + TMCPServer.Instance.Resources.Count.ToString);
-      LogI('Registered prompts: ' + TMCPServer.Instance.Prompts.Count.ToString);
-      LogI('Press Ctrl+C to shut down.');
-      WaitForTerminationSignal;
-      EnterInShutdownState;
-      LServer.Active := False;
-    finally
-      LSSLHandler.Free;
+
+    if dotEnv.Env('https.enabled', False) then
+    begin
+      LogI('HTTPS is enabled');
+      LServer.HTTPSConfigurator := TaurusTLSIndyConfigurator();
+      LServer.UseHTTPS := True;
+      LServer.CertFile := dotEnv.Env('https.cert.cacert', 'certificates\localhost.crt');
+      LServer.KeyFile := dotEnv.Env('https.cert.privkey', 'certificates\localhost.key');
+      LServer.CertPassword := dotEnv.Env('https.cert.password', '');
+      LProtocol := 'https';
+    end
+    else
+    begin
+      LogW('HTTPS is available but CURRENTLY NOT ENABLED');
+      LProtocol := 'http';
     end;
+
+    LServer.Listen(APort);
+
+    LogI('MCP Test Server listening on ' + LProtocol + '://localhost:' + APort.ToString + '/mcp');
+    LogI('Registered tools: ' + TMCPServer.Instance.Tools.Count.ToString);
+    LogI('Registered resources: ' + TMCPServer.Instance.Resources.Count.ToString);
+    LogI('Registered prompts: ' + TMCPServer.Instance.Prompts.Count.ToString);
+    LogI('Press Ctrl+C to shut down.');
+
+    WaitForTerminationSignal;
+    EnterInShutdownState;
+    LServer.Stop;
+    LServer := nil;
   finally
-    LServer.Free;
+    LEngine.Free;
   end;
 end;
 
@@ -193,9 +184,6 @@ begin
   begin
     LogI('** MCP Server Unit Test ** powered by DMVCFramework build ' + DMVCFRAMEWORK_VERSION);
     try
-      if WebRequestHandler <> nil then
-        WebRequestHandler.WebModuleClass := WebModuleClass;
-      WebRequestHandlerProc.MaxConnections := dotEnv.Env('dmvc.handler.max_connections', 1024);
       RunServer(dotEnv.Env('dmvc.server.port', 8080));
     except
       on E: Exception do

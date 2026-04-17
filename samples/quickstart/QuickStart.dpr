@@ -10,15 +10,19 @@
 //
 // ***************************************************************************
 //
-// QUICK START — HTTP + STDIO
-// ===========================
-// This is a ready-to-run MCP server with both HTTP and stdio transports.
-// Customize the provider units in the ../shared/ folder — they are
+// QUICK START  HTTP + STDIO (Indy Direct backend)
+// =================================================
+// Ready-to-run MCP server with both HTTP and stdio transports.
+// Customize the provider units in the ../shared/ folder  they are
 // shared with the stdio-only Quick Start project.
 //
-// NOTE: This project requires TaurusTLS (via DMVCFramework HTTP stack).
-//       If you only need stdio transport, use the quickstart_stdio project
-//       instead — it has zero HTTP dependencies.
+// The HTTP transport runs on DMVCFramework's Indy Direct server
+// (TMVCEngine.CreateForIndyDirect + TMVCServerFactory.CreateIndyDirect).
+// No WebBroker, no TWebModule, no TIdHTTPWebBrokerBridge: the engine
+// dispatches requests straight from TIdHTTPServer.
+//
+// If you only need stdio transport, use the quickstart_stdio project
+// instead  it has zero HTTP dependencies.
 //
 // HOW TO USE:
 //   1. Open this project in Delphi (or compile from command line)
@@ -39,14 +43,12 @@ program QuickStart;
 
 uses
   System.SysUtils,
-  Web.ReqMulti,
-  Web.WebReq,
-  Web.WebBroker,
   MVCFramework,
   MVCFramework.Logger,
   MVCFramework.DotEnv,
   MVCFramework.Commons,
-  IdHTTPWebBrokerBridge,
+  MVCFramework.Server.Intf,
+  MVCFramework.Server.Factory,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio,
   MVCFramework.Signal,
@@ -60,12 +62,40 @@ uses
   // Customize these files in the ../shared/ folder.
   ToolProviderU in '..\shared\ToolProviderU.pas',
   ResourceProviderU in '..\shared\ResourceProviderU.pas',
-  PromptProviderU in '..\shared\PromptProviderU.pas',
-  // --- Web module (handles HTTP transport) ---
-  WebModuleU in 'WebModuleU.pas' {MyWebModule: TWebModule};
+  PromptProviderU in '..\shared\PromptProviderU.pas';
 
 // {$R *.res}  // Uncomment after generating the .res file in Delphi IDE
 
+
+// ---------------------------------------------------------------------------
+// BuildEngine: configures TMVCEngine for IndyDirect
+//
+// TMVCEngine.CreateForIndyDirect is the speaking constructor for the
+// Indy Direct backend. No TWebModule is created; the engine owns the
+// request pipeline outright.
+// ---------------------------------------------------------------------------
+function BuildEngine: TMVCEngine;
+begin
+  Result := TMVCEngine.CreateForIndyDirect(
+    procedure(Config: TMVCConfig)
+    begin
+      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
+      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
+      Config[TMVCConfigKey.ExposeServerSignature] := 'false';
+    end);
+
+  // MCP session termination (HTTP DELETE on /mcp) per spec 2025-03-26.
+  Result.AddController(TMCPSessionController);
+
+  // Publish the MCP endpoint at "/mcp". The factory creates a fresh
+  // TMCPEndpoint per request; registered tools / resources / prompts
+  // are discovered automatically via RTTI.
+  Result.PublishObject(
+    function: TObject
+    begin
+      Result := TMCPServer.Instance.CreatePublishedEndpoint;
+    end, '/mcp');
+end;
 
 // ---------------------------------------------------------------------------
 // RunHTTPServer: starts the HTTP transport (Streamable HTTP)
@@ -73,13 +103,13 @@ uses
 // ---------------------------------------------------------------------------
 procedure RunHTTPServer(APort: Integer);
 var
-  LServer: TIdHTTPWebBrokerBridge;
+  LEngine: TMVCEngine;
+  LServer: IMVCServer;
 begin
-  LServer := TIdHTTPWebBrokerBridge.Create(nil);
+  LEngine := BuildEngine;
   try
-    LServer.OnParseAuthentication := TMVCParseAuthentication.OnParseAuthentication;
-    LServer.DefaultPort := APort;
-    LServer.Active := True;
+    LServer := TMVCServerFactory.CreateIndyDirect(LEngine);
+    LServer.Listen(APort);
 
     LogI('MCP Server listening on http://localhost:' + APort.ToString + '/mcp');
     LogI('Press Ctrl+C to shut down.');
@@ -87,9 +117,10 @@ begin
     // Block until Ctrl+C or SIGTERM
     WaitForTerminationSignal;
     EnterInShutdownState;
-    LServer.Active := False;
+    LServer.Stop;
+    LServer := nil;
   finally
-    LServer.Free;
+    LEngine.Free;
   end;
 end;
 
@@ -171,8 +202,6 @@ begin
   begin
     LogI('** MCP Quick Start Server ** powered by DMVCFramework');
     try
-      if WebRequestHandler <> nil then
-        WebRequestHandler.WebModuleClass := WebModuleClass;
       // Port is read from .env file, or defaults to 8080
       RunHTTPServer(dotEnv.Env('dmvc.server.port', 8080));
     except

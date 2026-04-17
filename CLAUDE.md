@@ -38,11 +38,23 @@ The library follows an **attribute-driven, RTTI-based discovery** pattern with D
 
 To add MCP capabilities, create a class extending `TMCPToolProvider`, decorate methods with `[MCPTool]` and parameters with `[MCPParam]`, and register via `TMCPServer.RegisterToolProvider()`. See `Sample/MyToolsU.pas` for examples.
 
-### Sample Application (`Sample/`)
+### Sample Application (`sample/`)
 
-- **MCPServerSample.dpr** — Console app entry point.
-- **WebModuleU.pas** — Bootstraps `TMVCEngine`, publishes MCP endpoint via `PublishObject`.
+- **MCPServerSample.dpr** — Console app entry point. Builds `TMVCEngine` via `TMVCEngine.CreateForIndyDirect`, publishes the MCP endpoint at `/mcp` through `PublishObject`, and starts an `IMVCServer` built by `TMVCServerFactory.CreateIndyDirect`. HTTPS is opt-in through `TaurusTLSIndyConfigurator`.
 - **MyToolsU.pas** — Example tools: `reverse_string`, `string_length`, `echo`.
+
+### HTTP transport
+
+All HTTP/HTTPS samples and the test server run on DMVCFramework's Indy Direct backend. There is no `TWebModule` / `Web.WebBroker` / `TIdHTTPWebBrokerBridge` in the uses chain: the engine owns the request pipeline. To enable HTTPS on a server, add `MVCFramework.Server.HTTPS.TaurusTLS` to the uses clause, then:
+
+```pascal
+LServer.HTTPSConfigurator := TaurusTLSIndyConfigurator();
+LServer.UseHTTPS := True;
+LServer.CertFile := '...';
+LServer.KeyFile  := '...';
+LServer.CertPassword := '...';
+LServer.Listen(APort);
+```
 
 ### Test Application (`tests/testproject/`)
 

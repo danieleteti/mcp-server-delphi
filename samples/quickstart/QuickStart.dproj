@@ -72,10 +72,6 @@
         <DCCReference Include="..\shared\ToolProviderU.pas"/>
         <DCCReference Include="..\shared\ResourceProviderU.pas"/>
         <DCCReference Include="..\shared\PromptProviderU.pas"/>
-        <DCCReference Include="WebModuleU.pas">
-            <Form>MyWebModule</Form>
-            <DesignClass>TWebModule</DesignClass>
-        </DCCReference>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

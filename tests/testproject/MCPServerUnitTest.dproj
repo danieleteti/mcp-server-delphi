@@ -136,10 +136,6 @@
         <DCCReference Include="MCPTestToolsU.pas"/>
         <DCCReference Include="MCPTestResourcesU.pas"/>
         <DCCReference Include="MCPTestPromptsU.pas"/>
-        <DCCReference Include="WebModuleU.pas">
-            <Form>MyWebModule</Form>
-            <DesignClass>TWebModule</DesignClass>
-        </DCCReference>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

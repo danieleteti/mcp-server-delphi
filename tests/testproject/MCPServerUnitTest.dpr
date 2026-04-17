@@ -53,7 +53,7 @@ uses
 // ---------------------------------------------------------------------------
 function BuildEngine: TMVCEngine;
 begin
-  Result := TMVCEngine.CreateForIndyDirect(
+  Result := TMVCEngine.Create(
     procedure(Config: TMVCConfig)
     begin
       Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;

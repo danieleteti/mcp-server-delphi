@@ -17,7 +17,7 @@
 // shared with the stdio-only Quick Start project.
 //
 // The HTTP transport runs on DMVCFramework's Indy Direct server
-// (TMVCEngine.CreateForIndyDirect + TMVCServerFactory.CreateIndyDirect).
+// (TMVCEngine.Create + TMVCServerFactory.CreateIndyDirect).
 // No WebBroker, no TWebModule, no TIdHTTPWebBrokerBridge: the engine
 // dispatches requests straight from TIdHTTPServer.
 //
@@ -70,13 +70,13 @@ uses
 // ---------------------------------------------------------------------------
 // BuildEngine: configures TMVCEngine for IndyDirect
 //
-// TMVCEngine.CreateForIndyDirect is the speaking constructor for the
+// TMVCEngine.Create is the speaking constructor for the
 // Indy Direct backend. No TWebModule is created; the engine owns the
 // request pipeline outright.
 // ---------------------------------------------------------------------------
 function BuildEngine: TMVCEngine;
 begin
-  Result := TMVCEngine.CreateForIndyDirect(
+  Result := TMVCEngine.Create(
     procedure(Config: TMVCConfig)
     begin
       Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;

@@ -51,13 +51,13 @@ uses
 // ---------------------------------------------------------------------------
 // BuildEngine: configures a TMVCEngine bound to the Indy Direct backend.
 //
-// TMVCEngine.CreateForIndyDirect is the speaking constructor for the
+// TMVCEngine.Create is the speaking constructor for the
 // Indy Direct transport  no TWebModule, no WebBroker bridge. The engine
 // owns the request pipeline directly.
 // ---------------------------------------------------------------------------
 function BuildEngine: TMVCEngine;
 begin
-  Result := TMVCEngine.CreateForIndyDirect(
+  Result := TMVCEngine.Create(
     procedure(Config: TMVCConfig)
     begin
       Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;

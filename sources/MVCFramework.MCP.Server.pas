@@ -533,12 +533,23 @@ begin
   LMethod := JSON.S[JSONRPC_METHOD];
   JSON.S[JSONRPC_METHOD] := LMethod.Replace('/', '');
 
+  { Always capture the incoming session id. It is empty for the very first
+    `initialize` call (that is how the client signals "give me a session")
+    but present on every subsequent request - including `ping`. Storing it
+    here unconditionally lets OnAfterCallHook echo it back via
+    `Mcp-Session-Id`, which the MCP spec requires on every response
+    after initialize. }
+  FSessionId := Context.Request.Headers[MCP_SESSION_HEADER];
+  FHandler.SessionId := FSessionId;
+
+  { Validation is skipped only for methods that can legitimately arrive
+    without a session: `initialize` creates one, and
+    `notifications/initialized` is the client's fire-and-forget ack. Every
+    other method - `ping` included - must carry a valid session or the
+    server replies with a JSON-RPC error. }
   if not SameText(LMethod, 'initialize') and
-     not SameText(LMethod, 'notifications/initialized') and
-     not SameText(LMethod, 'ping') then
+     not SameText(LMethod, 'notifications/initialized') then
   begin
-    FSessionId := Context.Request.Headers[MCP_SESSION_HEADER];
-    FHandler.SessionId := FSessionId;
     try
       FHandler.ValidateSession(LMethod);
     except

@@ -89,9 +89,13 @@ end;
 
 procedure TMCPRequestHandler.ValidateSession(const AMethod: string);
 begin
+  { Only the methods that can arrive before a session exists are exempt:
+    `initialize` creates the session, `notifications/initialized` is the
+    client's ack. Every other method (including `ping`) must present a
+    valid session - the spec's session lifecycle is how the server knows
+    a DELETE'd session is gone and a bogus one was never valid. }
   if SameText(AMethod, 'initialize') or
-     SameText(AMethod, 'notifications/initialized') or
-     SameText(AMethod, 'ping') then
+     SameText(AMethod, 'notifications/initialized') then
     Exit;
 
   if FSessionId.IsEmpty or

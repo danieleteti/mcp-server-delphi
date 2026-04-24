@@ -37,15 +37,15 @@
 
    | Project | Transport | Requires TaurusTLS | Use when |
    |---------|-----------|-------------------|----------|
-   | [`samples/quickstart/`](samples/quickstart/) | HTTP + stdio | Yes | You want a network server that AI clients connect to via HTTP |
-   | [`samples/quickstart_stdio/`](samples/quickstart_stdio/) | stdio only | **No** | You want the AI client (e.g. Claude Desktop) to launch the server locally |
+   | [`quickstart/quickstart/`](quickstart/quickstart/) | HTTP + stdio | Yes | You want a network server that AI clients connect to via HTTP |
+   | [`quickstart/quickstart_stdio/`](quickstart/quickstart_stdio/) | stdio only | **No** | You want the AI client (e.g. Claude Desktop) to launch the server locally |
 
-   Both projects share the **same provider units** in [`samples/shared/`](samples/shared/) — you write your tools, resources, and prompts once and both transports use them.
+   Both projects share the **same provider units** in [`quickstart/shared/`](quickstart/shared/) — you write your tools, resources, and prompts once and both transports use them.
 
    ### 1. Copy and build
 
    ```
-   samples/
+   quickstart/
    ├── shared/                      <-- ★ YOUR CODE: customize these files
    │   ├── ToolProviderU.pas        <--   tools the AI can call
    │   ├── ResourceProviderU.pas    <--   data the AI can read
@@ -59,7 +59,7 @@
        └── QuickStartStdio.dpr/.dproj
    ```
 
-   Copy `samples/shared/` + the project folder you need. Open the `.dproj` in Delphi, make sure DMVCFramework and this repository's `sources/` folder are in your search path, then build and run.
+   Copy `quickstart/shared/` + the project folder you need. Open the `.dproj` in Delphi, make sure DMVCFramework and this repository's `sources/` folder are in your search path, then build and run.
 
    **HTTP project** — you should see:
 
@@ -233,6 +233,15 @@
    # Server
    dmvc.server.port=8080
 
+   # Logger (optional — overrides defaults picked by BootConfigU)
+   logger.config.file=loggerpro.json
+   logger.config.file.stdio=loggerpro.stdio.json
+
+   # Profiler (optional, Sydney+)
+   dmvc.profiler.enabled=false
+   dmvc.profiler.warning_threshold=1000
+   dmvc.profiler.logs_only_over_threshold=true
+
    # HTTPS (optional — run generate_certificates.bat first)
    https.enabled=true
    https.cert.cacert=certificates\localhost.crt
@@ -240,12 +249,18 @@
    https.cert.password=
    ```
 
+   The `sample/` and `tests/testproject/` projects ship with both
+   `loggerpro.json` (Console + File appenders, for HTTP mode) and
+   `loggerpro.stdio.json` (File only, so stdout stays clean for MCP
+   JSON-RPC) in their `bin/` folders. `BootConfigU` picks the right one
+   automatically based on `--transport`.
+
    ### 🔒 HTTPS Setup
 
-   A `generate_certificates.bat` script is included in `Sample/bin/` to generate self-signed certificates for local development:
+   A `generate_certificates.bat` script is included in `sample/bin/` to generate self-signed certificates for local development:
 
    ```bash
-   cd Sample/bin
+   cd sample/bin
    generate_certificates.bat
    ```
 
@@ -299,7 +314,7 @@
    │   ├── MVCFramework.MCP.PromptProvider.pas      # Prompt base class
    │   ├── MVCFramework.MCP.Session.pas             # Session management
    │   └── MVCFramework.MCP.Types.pas               # Protocol types and constants
-   ├── samples/
+   ├── quickstart/                                  # Quick-start samples (minimal, pedagogical)
    │   ├── shared/                                  # ★ Shared providers — customize these
    │   │   ├── ToolProviderU.pas                    # Example tools
    │   │   ├── ResourceProviderU.pas                # Example resources
@@ -309,15 +324,21 @@
    │   │   └── bin/.env                             # Server port configuration
    │   └── quickstart_stdio/                        # stdio-only project (no TaurusTLS)
    │       └── QuickStartStdio.dpr/.dproj           # Lightweight console app
-   ├── sample/                                      # Advanced example (with TLS)
-   │   ├── MCPServerSample.dpr                      # Console app (HTTP + stdio + HTTPS)
+   ├── sample/                                      # Full-featured example (wizard-style layout)
+   │   ├── MCPServerSample.dpr                      # Slim entry point (HTTP + stdio + HTTPS)
+   │   ├── BootConfigU.pas                          # dotEnv + LoggerPro + profiler
+   │   ├── EngineConfigU.pas                        # Controllers + PublishObject wiring
    │   ├── MyToolsU.pas                             # Example MCP tools
    │   └── bin/
+   │       ├── loggerpro.json                       # Console + file appender config
+   │       ├── loggerpro.stdio.json                 # File-only appender config (stdio mode)
    │       └── generate_certificates.bat            # Self-signed SSL cert generator
    └── tests/
        ├── test_mcp_server.py                       # Python compliance test suite
-       └── testproject/                             # Delphi test server
-           ├── MCPServerUnitTest.dpr                # Test server (HTTP + stdio)
+       └── testproject/                             # Delphi test server (wizard-style layout)
+           ├── MCPServerUnitTest.dpr                # Slim entry point (HTTP + stdio)
+           ├── BootConfigU.pas                      # dotEnv + LoggerPro + profiler
+           ├── EngineConfigU.pas                    # Controllers + PublishObject wiring
            ├── MCPTestToolsU.pas                    # 18 tools covering all result types
            ├── MCPTestResourcesU.pas                # 3 resources (text + blob)
            ├── MCPTestPromptsU.pas                  # 3 prompts with arguments
@@ -326,12 +347,32 @@
 
    ## Server architecture
 
-   All HTTP/HTTPS transports run on DMVCFramework's **Indy Direct** backend
-   (`TMVCEngine.CreateForIndyDirect` + `TMVCServerFactory.CreateIndyDirect`).
-   No `TWebModule`, no WebBroker bridge: the engine dispatches requests
-   directly from `TIdHTTPServer`. HTTPS is opt-in via
-   `TaurusTLSIndyConfigurator` with `CertFile` / `KeyFile` /
-   `CertPassword` properties on the `IMVCServer`.
+   All HTTP/HTTPS transports run on DMVCFramework's **Indy Direct** backend.
+   The engine is built with `TMVCEngine.Create(AConfigAction)` and wrapped by
+   `TMVCServerFactory.CreateIndyDirect`. No `TWebModule`, no WebBroker
+   bridge: the engine dispatches requests directly from `TIdHTTPServer`.
+   HTTPS is opt-in via `TaurusTLSIndyConfigurator` with `CertFile` /
+   `KeyFile` / `CertPassword` properties on the `IMVCServer`.
+
+   ### Project layout (wizard-style)
+
+   The `sample/` and `tests/testproject/` projects follow the DMVCFramework
+   wizard layout: the `.dpr` stays slim and the configuration is split into
+   two units:
+
+   - **`BootConfigU.Boot`** — runs once at startup: configures dotEnv,
+     installs a `LoggerPro` logger from a JSON config (picks
+     `loggerpro.stdio.json` in stdio mode, `loggerpro.json` otherwise), and
+     enables the profiler. Call it as the first statement of `begin..end`,
+     before any `LogI`.
+   - **`EngineConfigU.ConfigureEngine`** — adds controllers
+     (`TMCPSessionController`) and publishes the MCP endpoint at `/mcp` via
+     `PublishObject`. Extend this unit to add your own controllers,
+     middlewares, or extra published objects.
+
+   Reading `MCPServerSample.dpr` top to bottom shows the whole startup
+   sequence: parse command line → `Boot` → create engine → `ConfigureEngine`
+   → run HTTP (with optional HTTPS) or stdio transport.
 
    ## Requirements
 

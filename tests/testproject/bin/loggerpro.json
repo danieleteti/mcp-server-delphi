@@ -1,0 +1,19 @@
+{
+  "configVersion": 1,
+  "minimumLevel": "Info",
+  "defaultTag": "MCPServerUnitTest",
+  "appenders": [
+    {
+      "type": "Console",
+      "renderer": "DMVCColorConsole",
+      "utf8Output": true
+    },
+    {
+      "type": "File",
+      "logsFolder": "logs",
+      "fileBaseName": "MCPServerUnitTest",
+      "maxBackupFiles": 5,
+      "maxFileSizeInKB": 10000
+    }
+  ]
+}

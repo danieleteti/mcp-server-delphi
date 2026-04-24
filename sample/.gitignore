@@ -23,12 +23,15 @@ __recovery/
 *.~*
 
 # Build output
-bin/
 Win32/
 Win64/
 Debug/
 Release/
+bin/logs/
+bin/__history/
+bin/__recovery/
+bin/certificates/*.crt
+bin/certificates/*.key
 
 # Environment files
-.env
 *.env.local

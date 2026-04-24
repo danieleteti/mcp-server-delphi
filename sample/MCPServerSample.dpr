@@ -34,6 +34,7 @@ uses
   MVCFramework.DotEnv,
   MVCFramework.Commons,
   MVCFramework.Serializer.Commons,
+  MVCFramework.Signal,
   MVCFramework.Server.Intf,
   MVCFramework.Server.Factory,
   // Pulled in only because https.enabled may be set. If HTTPS is never
@@ -42,44 +43,21 @@ uses
   MVCFramework.Server.HTTPS.TaurusTLS,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio,
-  MVCFramework.Signal,
-  MVCFramework.MCP.TransportConf, { MUST be before provider units to suppress stdout logging in stdio mode }
-  MyToolsU in 'MyToolsU.pas';
+  // MUST be listed BEFORE provider units: it reads --transport from the
+  // command line and suppresses stdout logging when stdio is selected.
+  MVCFramework.MCP.TransportConf,
+  MyToolsU in 'MyToolsU.pas',
+  BootConfigU in 'BootConfigU.pas',
+  EngineConfigU in 'EngineConfigU.pas';
 
 {$R *.res}
 
 // ---------------------------------------------------------------------------
-// BuildEngine: configures a TMVCEngine bound to the Indy Direct backend.
-//
-// TMVCEngine.Create is the speaking constructor for the
-// Indy Direct transport  no TWebModule, no WebBroker bridge. The engine
-// owns the request pipeline directly.
-// ---------------------------------------------------------------------------
-function BuildEngine: TMVCEngine;
-begin
-  Result := TMVCEngine.Create(
-    procedure(Config: TMVCConfig)
-    begin
-      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
-      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
-      Config[TMVCConfigKey.ExposeServerSignature] := dotEnv.Env('dmvc.expose_server_signature', 'false');
-    end);
-
-  // MCP session termination (HTTP DELETE on /mcp) per spec 2025-03-26.
-  Result.AddController(TMCPSessionController);
-
-  // Publish the MCP endpoint at "/mcp". The factory creates a fresh
-  // TMCPEndpoint per request; registered tools / resources / prompts
-  // are discovered automatically via RTTI.
-  Result.PublishObject(
-    function: TObject
-    begin
-      Result := TMCPServer.Instance.CreatePublishedEndpoint;
-    end, '/mcp');
-end;
-
-// ---------------------------------------------------------------------------
 // RunServer: starts the HTTP (optionally HTTPS) transport on Indy Direct.
+//
+// TMVCEngine.Create is the speaking constructor for the Indy Direct
+// transport - no TWebModule, no WebBroker bridge. The engine owns the
+// request pipeline directly.
 //
 // HTTPS is opt-in via the https.enabled env var. When enabled, the
 // IMVCServer's HTTPSConfigurator is set to TaurusTLSIndyConfigurator,
@@ -93,8 +71,15 @@ var
   LServer: IMVCServer;
   LProtocol: string;
 begin
-  LEngine := BuildEngine;
+  LEngine := TMVCEngine.Create(
+    procedure(Config: TMVCConfig)
+    begin
+      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
+      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
+      Config[TMVCConfigKey.ExposeServerSignature] := dotEnv.Env('dmvc.expose_server_signature', 'false');
+    end);
   try
+    ConfigureEngine(LEngine);
     LServer := TMVCServerFactory.CreateIndyDirect(LEngine);
     LServer.KeepAlive := dotEnv.Env('dmvc.indy.keep_alive', True);
     LServer.MaxConnections := dotEnv.Env('dmvc.webbroker.max_connections', 0);
@@ -119,6 +104,7 @@ begin
     LServer.Listen(APort);
 
     LogI('MCP Server listening on ' + LProtocol + '://localhost:' + APort.ToString + '/mcp');
+    LogI('Server type: Indy Direct');
     LogI('MCP Server started. Press Ctrl+C to shut down.');
 
     WaitForTerminationSignal;
@@ -130,6 +116,11 @@ begin
   end;
 end;
 
+// ---------------------------------------------------------------------------
+// RunStdio: drives the stdio transport.
+// Reads JSON-RPC messages from stdin, writes responses to stdout.
+// Used when an AI client (e.g. Claude Desktop) launches the server directly.
+// ---------------------------------------------------------------------------
 procedure RunStdio;
 var
   LTransport: TMCPStdioTransport;
@@ -165,22 +156,24 @@ end;
 var
   LTransport: string;
 begin
+  { Enable ReportMemoryLeaksOnShutdown during debug }
   // ReportMemoryLeaksOnShutdown := True;
   IsMultiThread := True;
+
+  // DMVCFramework specific configurations
   MVCSerializeNulls := True;
   MVCNameCaseDefault := TMVCNameCase.ncCamelCase;
 
-  { Parse transport early: in stdio mode, console logger must be disabled
-    before any LogI calls to prevent log output on stdout }
-  LTransport := ParseTransport;
-  if LTransport = 'stdio' then
-    UseConsoleLogger := False
-  else
-    UseConsoleLogger := True;
-  UseLoggerVerbosityLevel := TLogLevel.levNormal;
+  // BootConfigU.Boot: dotEnv + LoggerPro logger + profiler.
+  // In stdio mode (detected by MVCFramework.MCP.TransportConf) the logger
+  // selects loggerpro.stdio.json (file-only) to keep stdout clean for MCP.
+  // Must run before the first LogI. Edit BootConfigU to tune anything.
+  Boot;
 
   TMCPServer.Instance.ServerName := 'DMVCFrameworkMCPServerSample';
   TMCPServer.Instance.ServerVersion := '1.0.0';
+
+  LTransport := ParseTransport;
 
   if LTransport = 'stdio' then
   begin

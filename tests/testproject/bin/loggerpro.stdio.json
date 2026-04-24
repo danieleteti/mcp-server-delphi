@@ -1,0 +1,14 @@
+{
+  "configVersion": 1,
+  "minimumLevel": "Info",
+  "defaultTag": "MCPServerUnitTest",
+  "appenders": [
+    {
+      "type": "File",
+      "logsFolder": "logs",
+      "fileBaseName": "MCPServerUnitTest.stdio",
+      "maxBackupFiles": 5,
+      "maxFileSizeInKB": 10000
+    }
+  ]
+}

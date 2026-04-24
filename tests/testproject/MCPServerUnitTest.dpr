@@ -33,41 +33,23 @@ uses
   MVCFramework.DotEnv,
   MVCFramework.Commons,
   MVCFramework.Serializer.Commons,
+  MVCFramework.Signal,
   MVCFramework.Server.Intf,
   MVCFramework.Server.Factory,
   MVCFramework.Server.HTTPS.TaurusTLS,
-  MVCFramework.Signal,
-  MVCFramework.MCP.TransportConf, { MUST be before provider units to suppress stdout logging in stdio mode }
+  MVCFramework.MCP.Server,
+  MVCFramework.MCP.Stdio,
+  // MUST be listed BEFORE provider units: reads --transport from the
+  // command line and suppresses stdout logging when stdio is selected.
+  MVCFramework.MCP.TransportConf,
   MCPTestToolsU in 'MCPTestToolsU.pas',
   MCPTestResourcesU in 'MCPTestResourcesU.pas',
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
   MCPConformanceProvidersU in 'MCPConformanceProvidersU.pas',
-  MVCFramework.MCP.Server,
-  MVCFramework.MCP.Stdio;
+  BootConfigU in 'BootConfigU.pas',
+  EngineConfigU in 'EngineConfigU.pas';
 
 {$R *.res}
-
-// ---------------------------------------------------------------------------
-// BuildEngine: configures TMVCEngine for Indy Direct  the MCP endpoint
-// and the session controller are wired directly on the engine.
-// ---------------------------------------------------------------------------
-function BuildEngine: TMVCEngine;
-begin
-  Result := TMVCEngine.Create(
-    procedure(Config: TMVCConfig)
-    begin
-      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
-      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
-      Config[TMVCConfigKey.ExposeServerSignature] := 'false';
-    end);
-
-  Result.AddController(TMCPSessionController);
-  Result.PublishObject(
-    function: TObject
-    begin
-      Result := TMCPServer.Instance.CreatePublishedEndpoint;
-    end, '/mcp');
-end;
 
 // ---------------------------------------------------------------------------
 // RunServer: Indy Direct backend with optional HTTPS via TaurusTLS.
@@ -78,8 +60,15 @@ var
   LServer: IMVCServer;
   LProtocol: string;
 begin
-  LEngine := BuildEngine;
+  LEngine := TMVCEngine.Create(
+    procedure(Config: TMVCConfig)
+    begin
+      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
+      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
+      Config[TMVCConfigKey.ExposeServerSignature] := 'false';
+    end);
   try
+    ConfigureEngine(LEngine);
     LServer := TMVCServerFactory.CreateIndyDirect(LEngine);
     LServer.KeepAlive := dotEnv.Env('dmvc.indy.keep_alive', True);
     LServer.MaxConnections := dotEnv.Env('dmvc.webbroker.max_connections', 0);
@@ -104,6 +93,7 @@ begin
     LServer.Listen(APort);
 
     LogI('MCP Test Server listening on ' + LProtocol + '://localhost:' + APort.ToString + '/mcp');
+    LogI('Server type: Indy Direct');
     LogI('Registered tools: ' + TMCPServer.Instance.Tools.Count.ToString);
     LogI('Registered resources: ' + TMCPServer.Instance.Resources.Count.ToString);
     LogI('Registered prompts: ' + TMCPServer.Instance.Prompts.Count.ToString);
@@ -158,21 +148,18 @@ begin
   MVCSerializeNulls := True;
   MVCNameCaseDefault := TMVCNameCase.ncCamelCase;
 
-  { Parse transport early: in stdio mode, console logger must be disabled
-    before any LogI calls to prevent log output on stdout }
-  LTransport := ParseTransport;
-  if LTransport = 'stdio' then
-    UseConsoleLogger := False
-  else
-    UseConsoleLogger := True;
-  UseLoggerVerbosityLevel := TLogLevel.levNormal;
+  // BootConfigU.Boot: dotEnv + LoggerPro logger + profiler.
+  // The logger selects loggerpro.stdio.json (file-only) in stdio mode
+  // via MVCFramework.MCP.TransportConf.MCPTransportIsStdio.
+  Boot;
 
   TMCPServer.Instance.ServerName := 'MCPServerUnitTest';
   TMCPServer.Instance.ServerVersion := '1.0.0';
 
+  LTransport := ParseTransport;
+
   if LTransport = 'stdio' then
   begin
-    UseConsoleLogger := False;
     try
       RunStdio;
     except

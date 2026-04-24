@@ -14,7 +14,7 @@ MCP (Model Context Protocol) Server for DMVCFramework, using the idiomatic `Publ
 
 ```bash
 # Compile the sample application (requires Delphi compiler)
-dcc32.exe Sample/MCPServerSample.dpr -ESample/bin
+dcc32.exe sample/MCPServerSample.dpr -Esample/bin
 
 # Compile the test server
 dcc32.exe tests/testproject/MCPServerUnitTest.dpr -Etests/testproject/bin
@@ -40,8 +40,15 @@ To add MCP capabilities, create a class extending `TMCPToolProvider`, decorate m
 
 ### Sample Application (`sample/`)
 
-- **MCPServerSample.dpr** — Console app entry point. Builds `TMVCEngine` via `TMVCEngine.CreateForIndyDirect`, publishes the MCP endpoint at `/mcp` through `PublishObject`, and starts an `IMVCServer` built by `TMVCServerFactory.CreateIndyDirect`. HTTPS is opt-in through `TaurusTLSIndyConfigurator`.
+Organized like a DMVCFramework wizard-generated project (BootConfigU + EngineConfigU + slim .dpr):
+
+- **MCPServerSample.dpr** — Console entry point. Calls `Boot`, then runs HTTP (Indy Direct) or stdio transport based on `--transport`.
+- **BootConfigU.pas** — `Boot` configures dotEnv + LoggerPro + profiler. Picks `loggerpro.json` (console + file) or `loggerpro.stdio.json` (file only) via `MCPTransportIsStdio`.
+- **EngineConfigU.pas** — `ConfigureEngine` adds `TMCPSessionController` and publishes the MCP endpoint at `/mcp` via `PublishObject`.
 - **MyToolsU.pas** — Example tools: `reverse_string`, `string_length`, `echo`.
+- **bin/loggerpro.json, bin/loggerpro.stdio.json** — LoggerPro appender configs.
+
+The engine is built with `TMVCEngine.Create(AConfigAction)` then wrapped by `TMVCServerFactory.CreateIndyDirect`. HTTPS is opt-in through `TaurusTLSIndyConfigurator`. No WebBroker / TWebModule.
 
 ### HTTP transport
 
@@ -58,10 +65,14 @@ LServer.Listen(APort);
 
 ### Test Application (`tests/testproject/`)
 
+Same wizard-style layout as `sample/` (BootConfigU + EngineConfigU + slim .dpr).
+
 - **MCPServerUnitTest.dpr** — Test server with comprehensive providers.
+- **BootConfigU.pas / EngineConfigU.pas** — Boot + engine wiring (conformance providers registered via unit `initialization` sections).
 - **MCPTestToolsU.pas** — 18 tools exercising all `TMCPToolResult` factory methods and parameter types.
 - **MCPTestResourcesU.pas** — 3 resources (text and blob).
 - **MCPTestPromptsU.pas** — 3 prompts with required/optional arguments.
+- **MCPConformanceProvidersU.pas** — Conformance providers registering tools, resources, and prompts.
 
 ## Configuration
 

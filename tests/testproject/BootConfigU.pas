@@ -20,6 +20,7 @@ implementation
 
 uses
   System.SysUtils,
+  System.IOUtils,
   System.JSON,
   LoggerPro.Config,
   LoggerPro,
@@ -56,6 +57,11 @@ begin
     lConfigFile := dotEnv.Env('logger.config.file.stdio', 'loggerpro.stdio.json')
   else
     lConfigFile := dotEnv.Env('logger.config.file', 'loggerpro.json');
+
+  // Resolve relative to the exe directory, not cwd. MCP clients launch
+  // the server from their own working directory.
+  if not TPath.IsPathRooted(lConfigFile) then
+    lConfigFile := TPath.Combine(AppPath, lConfigFile);
 
   lBuilder := TLoggerProConfig.BuilderFromJSONFile(lConfigFile);
   SetDefaultLogger(lBuilder.Build);

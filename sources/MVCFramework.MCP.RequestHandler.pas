@@ -163,7 +163,17 @@ begin
   else if SameText(LMethod, 'prompts/get') then
     LResult := DoPromptsGet(LParams)
   else
+  begin
+    { JSON-RPC 2.0: unrecognized notifications MUST be silently ignored
+      (a notification has no "id" and never receives a response or error).
+      Clients like MCP Inspector send notifications/cancelled,
+      notifications/progress etc. that this server has no use for - logging
+      an error for each would just add noise to stderr. Requests (with id)
+      still get a proper -32601 / -32603 error envelope. }
+    if not LHasId then
+      Exit(nil);
     raise Exception.CreateFmt('Unknown method: %s', [LMethod]);
+  end;
 
   { For notifications (no id), return nil }
   if not LHasId then

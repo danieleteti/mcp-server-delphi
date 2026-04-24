@@ -47,6 +47,8 @@ uses
   // command line and suppresses stdout logging when stdio is selected.
   MVCFramework.MCP.TransportConf,
   MyToolsU in 'MyToolsU.pas',
+  MyResourcesU in 'MyResourcesU.pas',
+  MyPromptsU in 'MyPromptsU.pas',
   BootConfigU in 'BootConfigU.pas',
   EngineConfigU in 'EngineConfigU.pas';
 

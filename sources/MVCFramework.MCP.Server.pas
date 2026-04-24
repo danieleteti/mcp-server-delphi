@@ -166,6 +166,7 @@ type
       [MVCJSONRPCOptional] const Arguments: TJDOJsonObject;
       [MVCJSONRPCRestParams] const ExtraParams: TJDOJsonArray): TJDOJsonObject;
     function ResourcesList: TJDOJsonObject;
+    function ResourcesTemplatesList: TJDOJsonObject;
     function ResourcesRead(const URI: string;
       [MVCJSONRPCRestParams] const ExtraParams: TJDOJsonArray): TJDOJsonObject;
     function PromptsList: TJDOJsonObject;
@@ -631,6 +632,11 @@ end;
 function TMCPEndpoint.ResourcesList: TJDOJsonObject;
 begin
   Result := FHandler.DoResourcesList;
+end;
+
+function TMCPEndpoint.ResourcesTemplatesList: TJDOJsonObject;
+begin
+  Result := FHandler.DoResourcesTemplatesList;
 end;
 
 function TMCPEndpoint.ResourcesRead(const URI: string;

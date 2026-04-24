@@ -60,6 +60,7 @@ type
     function DoToolsList: TJDOJsonObject;
     function DoToolsCall(AParams: TJDOJsonObject): TJDOJsonObject;
     function DoResourcesList: TJDOJsonObject;
+    function DoResourcesTemplatesList: TJDOJsonObject;
     function DoResourcesRead(AParams: TJDOJsonObject): TJDOJsonObject;
     function DoPromptsList: TJDOJsonObject;
     function DoPromptsGet(AParams: TJDOJsonObject): TJDOJsonObject;
@@ -142,6 +143,8 @@ begin
     LResult := DoToolsCall(LParams)
   else if SameText(LMethod, 'resources/list') then
     LResult := DoResourcesList
+  else if SameText(LMethod, 'resources/templates/list') then
+    LResult := DoResourcesTemplatesList
   else if SameText(LMethod, 'resources/read') then
     LResult := DoResourcesRead(LParams)
   else if SameText(LMethod, 'prompts/list') then
@@ -381,6 +384,16 @@ begin
     LResObj.S['description'] := LInfo.Description;
     LResObj.S['mimeType'] := LInfo.MimeType;
   end;
+end;
+
+function TMCPRequestHandler.DoResourcesTemplatesList: TJDOJsonObject;
+begin
+  { MCP spec 2025-03-26: the server MUST respond to resources/templates/list
+    when the resources capability is advertised. The library does not
+    currently expose templated (URI-pattern) resources, so the list is
+    always empty - which is spec-compliant. }
+  Result := TJDOJsonObject.Create;
+  Result.A['resourceTemplates'];
 end;
 
 function TMCPRequestHandler.DoResourcesRead(AParams: TJDOJsonObject): TJDOJsonObject;

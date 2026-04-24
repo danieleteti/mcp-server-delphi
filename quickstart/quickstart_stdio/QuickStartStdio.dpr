@@ -50,6 +50,11 @@ uses
   System.SysUtils,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio,
+  // IMPORTANT: StdioOnly MUST be listed BEFORE the provider units.
+  // Its initialization section disables the default console logger so
+  // provider-registration LogI calls never leak on stdout (MCP stdio
+  // reserves stdout for JSON-RPC messages).
+  MVCFramework.MCP.StdioOnly,
   // --- Your MCP providers (shared with quickstart HTTP+stdio project) ---
   // Customize these files in the ../shared/ folder.
   ToolProviderU in '..\shared\ToolProviderU.pas',

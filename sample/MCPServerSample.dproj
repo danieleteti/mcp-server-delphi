@@ -134,6 +134,8 @@
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
         <DCCReference Include="MyToolsU.pas"/>
+        <DCCReference Include="MyResourcesU.pas"/>
+        <DCCReference Include="MyPromptsU.pas"/>
         <DCCReference Include="BootConfigU.pas"/>
         <DCCReference Include="EngineConfigU.pas"/>
         <BuildConfiguration Include="Base">

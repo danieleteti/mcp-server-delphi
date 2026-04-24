@@ -27,7 +27,11 @@ implementation
 
 uses
   MVCFramework.MCP.Server,
-  MyToolsU;
+  // Provider units self-register in their `initialization` sections: just
+  // listing them here is enough to activate them.
+  MyToolsU,
+  MyResourcesU,
+  MyPromptsU;
 
 procedure ConfigureEngine(AEngine: TMVCEngine);
 begin

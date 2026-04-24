@@ -32,6 +32,7 @@ uses
 
 type
   EMCPSessionError = class(Exception);
+  EMCPInvalidRequest = class(Exception);
 
   { -----------------------------------------------------------------------
     TMCPRequestHandler - transport-agnostic MCP protocol dispatch.
@@ -112,6 +113,16 @@ var
   LResult: TJDOJsonObject;
   LHasId: Boolean;
 begin
+  { JSON-RPC 2.0 spec: the "jsonrpc" member MUST be exactly "2.0" (section 4).
+    The HTTP transport enforces this via DMVC's JSON-RPC dispatcher before
+    HandleRequest ever runs, so this validation only fires on the direct
+    (stdio) path. Raising Exception keeps the stdio transport simple: it
+    already wraps exceptions into JSON-RPC error envelopes. }
+  if not SameText(ARequest.S['jsonrpc'], '2.0') then
+    raise EMCPInvalidRequest.Create(
+      'Invalid Request. The JSON sent is not a valid Request object. ' +
+      '[HINT] jsonrpc must be "2.0"');
+
   LMethod := ARequest.S['method'];
   LHasId := ARequest.Contains('id');
 

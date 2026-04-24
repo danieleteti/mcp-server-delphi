@@ -280,14 +280,21 @@
    To run the compliance tests against the test server:
 
    ```bash
-   # 1. Build and start the test server
+   # 1. Build the test server
    cd tests/testproject
-   # (build with Delphi IDE or command line, then run MCPServerUnitTest.exe)
+   # (build with Delphi IDE or command line)
 
-   # 2. Run the test suite
-   cd tests
-   python test_mcp_server.py -v
+   # 2a. HTTP transport: start the server manually, then run the HTTP suite
+   bin/MCPServerUnitTest.exe --transport http
+   python ../test_mcp_server.py -v
+
+   # 2b. Stdio transport: the suite launches the server as a subprocess
+   python ../test_mcp_server_stdio.py -v
    ```
+
+   The stdio suite can point at any stdio-capable MCP server via
+   `--cmd "path/to/exe [args...]"` and checks, among other things, that
+   stdout contains only valid JSON-RPC (no log pollution).
 
    Compliance coverage includes:
    - MCP 2025-03-26 protocol compliance

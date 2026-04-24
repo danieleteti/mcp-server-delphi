@@ -135,6 +135,43 @@ begin
           else
             LogStderr('Session error on notification: ' + E.Message);
         end;
+        on E: EMCPInvalidRequest do
+        begin
+          { Malformed request: the jsonrpc field is missing or != "2.0".
+            Per spec this is -32600 Invalid Request. Id may be absent; use
+            null in that case, matching the parse-error branch above. }
+          if LHasId then
+          begin
+            LErrorResponse := TJDOJsonObject.Create;
+            try
+              LErrorResponse.S['jsonrpc'] := '2.0';
+              LErrorResponse.O['error'].I['code'] := -32600;
+              LErrorResponse.O['error'].S['message'] := E.Message;
+              case LRequest.Types['id'] of
+                jdtString:
+                  LErrorResponse.S['id'] := LRequest.S['id'];
+                jdtInt:
+                  LErrorResponse.I['id'] := LRequest.I['id'];
+                jdtLong:
+                  LErrorResponse.L['id'] := LRequest.L['id'];
+              else
+                LErrorResponse.S['id'] := LRequest.S['id'];
+              end;
+              WriteLn(Output, LErrorResponse.ToJSON(True));
+              Flush(Output);
+            finally
+              LErrorResponse.Free;
+            end;
+          end
+          else
+          begin
+            { No id - build JSON manually to ensure id is JSON null, not
+              missing and not an empty string. }
+            WriteLn(Output, '{"jsonrpc":"2.0","error":{"code":-32600,"message":"' +
+              E.Message.Replace('\', '\\').Replace('"', '\"') + '"},"id":null}');
+            Flush(Output);
+          end;
+        end;
         on E: Exception do
         begin
           if LHasId then

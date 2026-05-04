@@ -561,35 +561,312 @@ begin
 end;
 
 function TMCPBridgeCodeGen.ToolNameToMethodName(const AToolName: string): string;
+var
+  LParts: TArray<string>;
+  LSB: TStringBuilder;
+  LPart: string;
 begin
-  raise Exception.Create('Not implemented');
+  LParts := AToolName.Split(['_']);
+  LSB := TStringBuilder.Create;
+  try
+    for LPart in LParts do
+      if not LPart.IsEmpty then
+        LSB.Append(LPart[1].ToUpper + LPart.Substring(1));
+    Result := LSB.ToString;
+  finally
+    LSB.Free;
+  end;
 end;
 
 function TMCPBridgeCodeGen.ToolNameToProviderName(const AControllerClassName: string): string;
+var
+  LName: string;
 begin
-  raise Exception.Create('Not implemented');
+  LName := AControllerClassName;
+  if LName.StartsWith('T') then LName := LName.Substring(1);
+  if LName.EndsWith('Controller') then
+    LName := LName.Substring(0, Length(LName) - Length('Controller'));
+  Result := 'T' + LName + 'MCPProvider';
 end;
 
 procedure TMCPBridgeCodeGen.WriteProviderFile(const AOutputPath, AControllerClassName: string; ARoutes: TArray<TMCPBridgeRouteInfo>);
+var
+  LFileName, LProviderName, LUnitName: string;
+  LSB: TStringBuilder;
+  LRoute: TMCPBridgeRouteInfo;
+  LParam: TMCPBridgeParamInfo;
+  LFirst: Boolean;
+  LDate, LURLExpr, LQuerySep: string;
+  LHasBody: Boolean;
+  LBodyParamName: string;
 begin
-  raise Exception.Create('Not implemented');
+  LProviderName := ToolNameToProviderName(AControllerClassName);
+  LUnitName := 'MCP' + AControllerClassName;
+  if LUnitName.EndsWith('Controller') then
+    LUnitName := LUnitName.Substring(0, Length(LUnitName) - Length('Controller'));
+  LUnitName := LUnitName + 'ProviderU';
+  LFileName := IncludeTrailingPathDelimiter(AOutputPath) + LUnitName + '.pas';
+  LDate := FormatDateTime('yyyy-mm-dd', Now);
+
+  LSB := TStringBuilder.Create;
+  try
+    LSB.AppendLine('// *** GENERATED ' + LDate + ' — REVIEW AND CURATE BEFORE PRODUCTION USE ***');
+    LSB.AppendLine('// Source: ' + AControllerClassName);
+    LSB.AppendLine('// Generator: MVCFramework.MCP.Bridge / GenerateProviderUnit');
+    LSB.AppendLine('');
+    LSB.AppendLine('unit ' + LUnitName + ';');
+    LSB.AppendLine('');
+    LSB.AppendLine('interface');
+    LSB.AppendLine('');
+    LSB.AppendLine('uses');
+    LSB.AppendLine('  MVCFramework.MCP.ToolProvider, MVCFramework.MCP.Attributes,');
+    LSB.AppendLine('  MVCFramework.MCP.Server, System.Net.HttpClient,');
+    LSB.AppendLine('  System.Classes, System.SysUtils, System.NetEncoding;');
+    LSB.AppendLine('');
+    LSB.AppendLine('type');
+    LSB.AppendLine('  ' + LProviderName + ' = class(TMCPToolProvider)');
+    LSB.AppendLine('  private');
+    LSB.AppendLine('    FBaseURL: string;');
+    LSB.AppendLine('  public');
+    LSB.AppendLine('    constructor Create; override;');
+    LSB.AppendLine('');
+
+    for LRoute in ARoutes do
+    begin
+      if LRoute.Description.IsEmpty then
+        LSB.AppendLine('    // TODO: add description (no [MVCDoc] found on action)');
+      LSB.AppendLine('    [MCPTool(''' + LRoute.ToolName + ''', ''' +
+        StringReplace(LRoute.Description, '''', '''''', [rfReplaceAll]) + ''')]');
+      LSB.Append('    function ' + ToolNameToMethodName(LRoute.ToolName) + '(');
+      LFirst := True;
+      for LParam in LRoute.Params do
+      begin
+        if not LFirst then LSB.Append(';');
+        LSB.AppendLine('');
+        LSB.Append('      [MCPParam(''' + LParam.Description + '''');
+        if not LParam.Required then LSB.Append(', False');
+        LSB.Append(')] const ' + LParam.Name + ': ');
+        case LParam.TypeKind of
+          tkInteger: LSB.Append('Integer');
+          tkInt64:   LSB.Append('Int64');
+          tkFloat:   LSB.Append('Double');
+          tkEnumeration: LSB.Append('Boolean');
+        else
+          LSB.Append('string');
+        end;
+        LFirst := False;
+      end;
+      LSB.AppendLine('');
+      LSB.AppendLine('    ): TMCPToolResult;');
+      LSB.AppendLine('');
+    end;
+
+    LSB.AppendLine('  end;');
+    LSB.AppendLine('');
+    LSB.AppendLine('implementation');
+    LSB.AppendLine('');
+    LSB.AppendLine('constructor ' + LProviderName + '.Create;');
+    LSB.AppendLine('begin');
+    LSB.AppendLine('  inherited;');
+    LSB.AppendLine('  FBaseURL := ''http://localhost:8080''; // TODO: move to config / .env');
+    LSB.AppendLine('end;');
+    LSB.AppendLine('');
+
+    for LRoute in ARoutes do
+    begin
+      LSB.AppendLine('function ' + LProviderName + '.' +
+        ToolNameToMethodName(LRoute.ToolName) + '(');
+      LFirst := True;
+      for LParam in LRoute.Params do
+      begin
+        if not LFirst then LSB.AppendLine(';');
+        LSB.Append('  const ' + LParam.Name + ': ');
+        case LParam.TypeKind of
+          tkInteger: LSB.Append('Integer');
+          tkInt64:   LSB.Append('Int64');
+          tkFloat:   LSB.Append('Double');
+          tkEnumeration: LSB.Append('Boolean');
+        else LSB.Append('string');
+        end;
+        LFirst := False;
+      end;
+      LSB.AppendLine('');
+      LSB.AppendLine('): TMCPToolResult;');
+      LSB.AppendLine('var');
+      LSB.AppendLine('  LClient: TNetHTTPClient;');
+      LSB.AppendLine('  LResp: IHTTPResponse;');
+      LSB.AppendLine('  LURL: string;');
+
+      LHasBody := False;
+      LBodyParamName := '';
+      for LParam in LRoute.Params do
+        if LParam.Kind = bpkBody then
+        begin
+          LHasBody := True;
+          LBodyParamName := LParam.Name;
+          Break;
+        end;
+      if LHasBody then
+        LSB.AppendLine('  LBodyStream: TStringStream;');
+
+      LSB.AppendLine('begin');
+      LSB.AppendLine('  LClient := TNetHTTPClient.Create(nil);');
+      if LHasBody then
+        LSB.AppendLine('  LBodyStream := TStringStream.Create(' +
+          LBodyParamName + ', TEncoding.UTF8);');
+
+      // Build URL — substitute ($name) path params inline
+      LURLExpr := 'FBaseURL + ''' + LRoute.PathTemplate + '''';
+      for LParam in LRoute.Params do
+        if LParam.Kind = bpkPath then
+        begin
+          // Replace ($paramName) in the template expression
+          LURLExpr := StringReplace(LURLExpr,
+            '($' + LParam.Name + ')',
+            '''+' + LParam.Name + '.ToString+''',
+            [rfReplaceAll, rfIgnoreCase]);
+        end;
+      // Append query params
+      LQuerySep := '?';
+      for LParam in LRoute.Params do
+        if LParam.Kind = bpkQuery then
+        begin
+          LURLExpr := LURLExpr + '+''' + LQuerySep + LParam.Name + '=''+' +
+            LParam.Name + '.ToString';
+          LQuerySep := '&';
+        end;
+
+      LSB.AppendLine('  LURL := ' + LURLExpr + ';');
+
+      LSB.AppendLine('  try');
+      if LHasBody then
+      begin
+        if SameText(LRoute.HTTPMethod, 'PUT') then
+          LSB.AppendLine('    LResp := LClient.Put(LURL, LBodyStream);')
+        else if SameText(LRoute.HTTPMethod, 'PATCH') then
+          LSB.AppendLine('    LResp := LClient.Patch(LURL, LBodyStream);')
+        else
+          LSB.AppendLine('    LResp := LClient.Post(LURL, LBodyStream);');
+      end
+      else
+      begin
+        if SameText(LRoute.HTTPMethod, 'DELETE') then
+          LSB.AppendLine('    LResp := LClient.Delete(LURL);')
+        else
+          LSB.AppendLine('    LResp := LClient.Get(LURL);');
+      end;
+
+      LSB.AppendLine('    if LResp.StatusCode < 400 then');
+      LSB.AppendLine('      Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))');
+      LSB.AppendLine('    else');
+      LSB.AppendLine('      Result := TMCPToolResult.Error(');
+      LSB.AppendLine('        ''HTTP '' + LResp.StatusCode.ToString + '': '' + LResp.ContentAsString(TEncoding.UTF8));');
+      LSB.AppendLine('  finally');
+      if LHasBody then
+        LSB.AppendLine('    LBodyStream.Free;');
+      LSB.AppendLine('    LClient.Free;');
+      LSB.AppendLine('  end;');
+      LSB.AppendLine('end;');
+      LSB.AppendLine('');
+    end;
+
+    LSB.AppendLine('initialization');
+    LSB.AppendLine('  TMCPServer.Instance.RegisterToolProvider(' + LProviderName + ');');
+    LSB.AppendLine('');
+    LSB.AppendLine('end.');
+
+    TFile.WriteAllText(LFileName, LSB.ToString, TEncoding.UTF8);
+  finally
+    LSB.Free;
+  end;
 end;
 
 procedure TMCPBridgeCodeGen.GenerateAll(const AOutputPath: string);
+var
+  LByController: TDictionary<string, TList<TMCPBridgeRouteInfo>>;
+  LDynProvider: TMCPToolProvider;
+  LBridgeProvider: TMCPBridgeProvider;
+  LRoute: TMCPBridgeRouteInfo;
+  LGroup: TList<TMCPBridgeRouteInfo>;
+  LPair: TPair<string, TList<TMCPBridgeRouteInfo>>;
+  LRoutesArray: TArray<TMCPBridgeRouteInfo>;
+  I: Integer;
 begin
-  raise Exception.Create('Not implemented');
+  LByController := TDictionary<string, TList<TMCPBridgeRouteInfo>>.Create;
+  try
+    for LDynProvider in FServer.DynamicProviders do
+    begin
+      if not (LDynProvider is TMCPBridgeProvider) then Continue;
+      LBridgeProvider := TMCPBridgeProvider(LDynProvider);
+      for LRoute in LBridgeProvider.Routes do
+      begin
+        if not LByController.TryGetValue(LRoute.ControllerClassName, LGroup) then
+        begin
+          LGroup := TList<TMCPBridgeRouteInfo>.Create;
+          LByController.Add(LRoute.ControllerClassName, LGroup);
+        end;
+        LGroup.Add(LRoute);
+      end;
+    end;
+
+    for LPair in LByController do
+    begin
+      SetLength(LRoutesArray, LPair.Value.Count);
+      for I := 0 to LPair.Value.Count - 1 do
+        LRoutesArray[I] := LPair.Value[I];
+      WriteProviderFile(AOutputPath, LPair.Key, LRoutesArray);
+    end;
+  finally
+    for LPair in LByController do
+      LPair.Value.Free;
+    LByController.Free;
+  end;
 end;
 
 { TMCPServerBridgeHelper }
 
 procedure TMCPServerBridgeHelper.RegisterFromEngine(AEngine: TMVCEngine; const ABaseURL: string);
+var
+  LScanner: TMCPEngineScanner;
+  LRoutes: TArray<TMCPBridgeRouteInfo>;
+  LProvider: TMCPBridgeProvider;
+  LRoute: TMCPBridgeRouteInfo;
 begin
-  raise Exception.Create('Not implemented');
+  if ABaseURL.IsEmpty then
+    raise EMCPBridgeException.Create(
+      'MCPBridge.RegisterFromEngine: ABaseURL must not be empty');
+
+  LScanner := TMCPEngineScanner.Create(AEngine);
+  try
+    LRoutes := LScanner.Scan;
+  finally
+    LScanner.Free;
+  end;
+
+  LProvider := TMCPBridgeProvider.Create(ABaseURL);
+  for LRoute in LRoutes do
+    LProvider.AddRoute(LRoute);
+  // TMCPServer takes ownership of LProvider (and transitively of the routes inside it)
+  Self.RegisterDynamicProvider(LProvider);
+
+  if not Self.ServerName.Contains('[bootstrap proxy') then
+    Self.ServerName := Self.ServerName + ' [bootstrap proxy — not for production]';
 end;
 
 procedure TMCPServerBridgeHelper.GenerateProviderUnit(const AOutputPath: string);
+var
+  LCodeGen: TMCPBridgeCodeGen;
 begin
-  raise Exception.Create('Not implemented');
+  if not DirectoryExists(AOutputPath) then
+    raise EMCPBridgeException.CreateFmt(
+      'MCPBridge.GenerateProviderUnit: output directory not found: %s', [AOutputPath]);
+
+  LCodeGen := TMCPBridgeCodeGen.Create(Self);
+  try
+    LCodeGen.GenerateAll(AOutputPath);
+  finally
+    LCodeGen.Free;
+  end;
 end;
 
 end.

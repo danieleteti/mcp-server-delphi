@@ -54,6 +54,10 @@ type
     RttiMethod: TRttiMethod;
     Params: TArray<TMCPParamInfo>;
     InputSchema: TJDOJsonObject;
+    { Non-nil for dynamic tools (bridge proxy). When set, DoToolsCall calls
+      HandlerInstance.InvokeDynamic instead of RTTI dispatch. Not owned here —
+      ownership is in TMCPServer.FDynamicProviders. }
+    HandlerInstance: TMCPToolProvider;
     destructor Destroy; override;
   end;
 
@@ -121,6 +125,7 @@ type
     FResources: TObjectDictionary<string, TMCPResourceInfo>;
     FPrompts: TObjectDictionary<string, TMCPPromptInfo>;
     FRttiContext: TRttiContext;
+    FDynamicProviders: TObjectList<TMCPToolProvider>;
 
     procedure ScanToolProvider(AProviderClass: TMCPToolProviderClass);
     procedure ScanResourceProvider(AProviderClass: TMCPResourceProviderClass);
@@ -141,6 +146,10 @@ type
     procedure RegisterResourceProvider(AProviderClass: TMCPResourceProviderClass);
     procedure RegisterPromptProvider(AProviderClass: TMCPPromptProviderClass);
 
+    { Registers a pre-built provider instance. Tools come from
+      AProvider.GetDynamicToolDefs. TMCPServer takes ownership of AProvider. }
+    procedure RegisterDynamicProvider(AProvider: TMCPToolProvider);
+
     { Creates a published endpoint for use with TMVCEngine.PublishObject }
     function CreatePublishedEndpoint: TObject;
 
@@ -150,6 +159,8 @@ type
     property Tools: TObjectDictionary<string, TMCPToolInfo> read FTools;
     property Resources: TObjectDictionary<string, TMCPResourceInfo> read FResources;
     property Prompts: TObjectDictionary<string, TMCPPromptInfo> read FPrompts;
+    { Read-only access to dynamic providers — used by TMCPBridgeCodeGen. }
+    property DynamicProviders: TObjectList<TMCPToolProvider> read FDynamicProviders;
   end;
 
   { -----------------------------------------------------------------------
@@ -231,6 +242,7 @@ begin
   FResources := TObjectDictionary<string, TMCPResourceInfo>.Create([doOwnsValues]);
   FPrompts := TObjectDictionary<string, TMCPPromptInfo>.Create([doOwnsValues]);
   FRttiContext := TRttiContext.Create;
+  FDynamicProviders := TObjectList<TMCPToolProvider>.Create(True); // owns objects
   if ASessionManager <> nil then
     FSessionManager := ASessionManager
   else
@@ -265,6 +277,7 @@ end;
 
 destructor TMCPServer.Destroy;
 begin
+  FDynamicProviders.Free;
   FTools.Free;
   FResources.Free;
   FPrompts.Free;
@@ -290,6 +303,52 @@ end;
 procedure TMCPServer.RegisterPromptProvider(AProviderClass: TMCPPromptProviderClass);
 begin
   ScanPromptProvider(AProviderClass);
+end;
+
+procedure TMCPServer.RegisterDynamicProvider(AProvider: TMCPToolProvider);
+var
+  LDefs: TArray<TMCPDynamicToolDef>;
+  LDef: TMCPDynamicToolDef;
+  LToolInfo: TMCPToolInfo;
+  I: Integer;
+  LKey: string;
+  LParamInfo: TMCPParamInfo;
+begin
+  LDefs := AProvider.GetDynamicToolDefs;
+  for LDef in LDefs do
+  begin
+    LToolInfo := TMCPToolInfo.Create;
+    try
+      LToolInfo.Name := LDef.Name;
+      LToolInfo.Description := LDef.Description;
+      LToolInfo.ProviderClass := nil;
+      LToolInfo.RttiMethod := nil;
+      LToolInfo.HandlerInstance := AProvider;
+
+      SetLength(LToolInfo.Params, Length(LDef.Params));
+      for I := 0 to High(LDef.Params) do
+      begin
+        LParamInfo.Name         := LDef.Params[I].Name;
+        LParamInfo.Description  := LDef.Params[I].Description;
+        LParamInfo.Required     := LDef.Params[I].Required;
+        LParamInfo.TypeKind     := LDef.Params[I].TypeKind;
+        LParamInfo.JsonSchemaType := LDef.Params[I].JsonSchemaType;
+        LToolInfo.Params[I] := LParamInfo;
+      end;
+
+      LToolInfo.InputSchema := BuildInputSchemaFromParams(LToolInfo.Params);
+
+      LKey := LowerCase(LToolInfo.Name);
+      if FTools.ContainsKey(LKey) then
+        raise Exception.CreateFmt('Duplicate tool name: "%s"', [LToolInfo.Name]);
+      FTools.Add(LKey, LToolInfo);
+    except
+      LToolInfo.Free;
+      raise;
+    end;
+    LogI('MCP: Registered dynamic tool "' + LDef.Name + '"');
+  end;
+  FDynamicProviders.Add(AProvider); // take ownership
 end;
 
 { --- RTTI scanning at startup --- }

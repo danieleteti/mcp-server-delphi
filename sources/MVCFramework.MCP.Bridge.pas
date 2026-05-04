@@ -426,18 +426,15 @@ begin
       LValue := '';
       if (AArguments <> nil) and AArguments.Contains(LParam.Name) then
         LValue := AArguments.S[LParam.Name];
-      // DMVCFramework path params use ($name) format
-      LPath := StringReplace(LPath, '($' + LParam.Name + ')', TNetEncoding.URL.Encode(LValue), [rfIgnoreCase]);
-      // Handle typed form ($name:anytype)
+      var LEncoded := TNetEncoding.URL.Encode(LValue).Replace('+', '%20', [rfReplaceAll]);
+      LPath := StringReplace(LPath, '($' + LParam.Name + ')', LEncoded, [rfIgnoreCase]);
       LTypedPat := '($' + LParam.Name + ':';
       LStart := Pos(LTypedPat, LPath);
       if LStart > 0 then
       begin
         LEnd := Pos(')', LPath, LStart);
         if LEnd > LStart then
-          LPath := Copy(LPath, 1, LStart - 1) +
-                   TNetEncoding.URL.Encode(LValue) +
-                   Copy(LPath, LEnd + 1, MaxInt);
+          LPath := Copy(LPath, 1, LStart - 1) + LEncoded + Copy(LPath, LEnd + 1, MaxInt);
       end;
     end;
   end;
@@ -458,9 +455,9 @@ begin
       if (AArguments = nil) or not AArguments.Contains(LParam.Name) then Continue;
       LValue := AArguments.S[LParam.Name];
       if LSB.Length = 0 then LSB.Append('?') else LSB.Append('&');
-      LSB.Append(TNetEncoding.URL.Encode(LParam.Name));
+      LSB.Append(TNetEncoding.URL.Encode(LParam.Name).Replace('+', '%20', [rfReplaceAll]));
       LSB.Append('=');
-      LSB.Append(TNetEncoding.URL.Encode(LValue));
+      LSB.Append(TNetEncoding.URL.Encode(LValue).Replace('+', '%20', [rfReplaceAll]));
     end;
     Result := LSB.ToString;
   finally
@@ -523,41 +520,35 @@ begin
       Break;
     end;
 
+  LBodyStream := nil;
+  if LHasBody then
+    LBodyStream := TStringStream.Create(LBodyContent, TEncoding.UTF8);
   try
-    if LHasBody then
-    begin
-      LBodyStream := TStringStream.Create(LBodyContent, TEncoding.UTF8);
-      try
-        if SameText(LRoute.HTTPMethod, 'POST') then
-          LResp := FHttpClient.Post(LURL, LBodyStream)
-        else if SameText(LRoute.HTTPMethod, 'PUT') then
-          LResp := FHttpClient.Put(LURL, LBodyStream)
-        else if SameText(LRoute.HTTPMethod, 'PATCH') then
-          LResp := FHttpClient.Patch(LURL, LBodyStream)
-        else
-          LResp := FHttpClient.Post(LURL, LBodyStream);
-      finally
-        LBodyStream.Free;
-      end;
-    end
-    else
-    begin
+    try
       if SameText(LRoute.HTTPMethod, 'GET') then
         LResp := FHttpClient.Get(LURL)
       else if SameText(LRoute.HTTPMethod, 'DELETE') then
         LResp := FHttpClient.Delete(LURL)
+      else if SameText(LRoute.HTTPMethod, 'POST') then
+        LResp := FHttpClient.Post(LURL, LBodyStream)
+      else if SameText(LRoute.HTTPMethod, 'PUT') then
+        LResp := FHttpClient.Put(LURL, LBodyStream)
+      else if SameText(LRoute.HTTPMethod, 'PATCH') then
+        LResp := FHttpClient.Patch(LURL, LBodyStream)
       else
         LResp := FHttpClient.Get(LURL);
-    end;
 
-    if LResp.StatusCode < 400 then
-      Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))
-    else
-      Result := TMCPToolResult.Error(
-        'HTTP ' + LResp.StatusCode.ToString + ': ' + LResp.ContentAsString(TEncoding.UTF8));
-  except
-    on E: Exception do
-      Result := TMCPToolResult.Error('Network error: ' + E.Message);
+      if LResp.StatusCode < 400 then
+        Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))
+      else
+        Result := TMCPToolResult.Error(
+          'HTTP ' + LResp.StatusCode.ToString + ': ' + LResp.ContentAsString(TEncoding.UTF8));
+    except
+      on E: Exception do
+        Result := TMCPToolResult.Error('Network error: ' + E.Message);
+    end;
+  finally
+    LBodyStream.Free;
   end;
 end;
 

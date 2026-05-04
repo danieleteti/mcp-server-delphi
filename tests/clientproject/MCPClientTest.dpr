@@ -396,6 +396,89 @@ begin
   end;
 end;
 
+procedure TestBridge(AClient: TMCPClientBase; AR: TTestRunner);
+var
+  LResult: string;
+  LObj: TJSONValue;
+  LJO: TJSONObject;
+begin
+  AR.Section('Bridge (proxy tools)');
+
+  // GET /bridge-test — no params
+  try
+    LResult := AClient.CallTool('get_bridge-test', TJSONObject.Create);
+    LObj := TJSONObject.ParseJSONValue(LResult);
+    try
+      if Assigned(LObj) and (LObj is TJSONObject) then
+        AR.Ok('bridge get_bridge-test → JSON response')
+      else
+        AR.Fail('get_bridge-test', 'expected JSON, got: ' + Copy(LResult, 1, 60));
+    finally
+      LObj.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('get_bridge-test', E.ClassName + ': ' + E.Message);
+  end;
+
+  // GET /bridge-test/($name) — path param
+  try
+    LResult := AClient.CallTool('get_bridge-test_by_name',
+      TJSONObject.Create.AddPair('name', 'World'));
+    if Pos('World', LResult) > 0 then
+      AR.Ok('bridge get_bridge-test_by_name → greeting for "World"')
+    else
+      AR.Fail('get_bridge-test_by_name',
+        'expected "World" in response, got: ' + Copy(LResult, 1, 60));
+  except
+    on E: Exception do
+      AR.Fail('get_bridge-test_by_name', E.ClassName + ': ' + E.Message);
+  end;
+
+  // GET /bridge-test/search?q=foo&limit=3 — query params
+  try
+    LResult := AClient.CallTool('get_bridge-test_search',
+      TJSONObject.Create
+        .AddPair('q', 'foo')
+        .AddPair('limit', TJSONNumber.Create(3)));
+    LObj := TJSONObject.ParseJSONValue(LResult);
+    try
+      if Assigned(LObj) and (LObj is TJSONObject) then
+      begin
+        LJO := TJSONObject(LObj);
+        if (LJO.GetValue<string>('q', '') = 'foo') and
+           (LJO.GetValue<Integer>('limit', 0) = 3) then
+          AR.Ok('bridge get_bridge-test_search → q and limit reflected')
+        else
+          AR.Fail('get_bridge-test_search',
+            'q/limit not reflected; got: ' + Copy(LResult, 1, 80));
+      end
+      else
+        AR.Fail('get_bridge-test_search',
+          'expected JSON, got: ' + Copy(LResult, 1, 60));
+    finally
+      LObj.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('get_bridge-test_search', E.ClassName + ': ' + E.Message);
+  end;
+
+  // POST /bridge-test/echo — body param
+  try
+    LResult := AClient.CallTool('post_bridge-test_echo',
+      TJSONObject.Create.AddPair('body', '{"echo":true}'));
+    if Pos('echo', LResult) > 0 then
+      AR.Ok('bridge post_bridge-test_echo → body echoed')
+    else
+      AR.Fail('post_bridge-test_echo',
+        'expected echo in response, got: ' + Copy(LResult, 1, 60));
+  except
+    on E: Exception do
+      AR.Fail('post_bridge-test_echo', E.ClassName + ': ' + E.Message);
+  end;
+end;
+
 procedure TestPrompts(AClient: TMCPClientBase; AR: TTestRunner);
 var
   LPrompts, LMessages: TJSONArray;
@@ -499,6 +582,7 @@ begin
         TestResources(LClient, LR);
         TestResourceTemplates(LClient, LR);
         TestPrompts(LClient, LR);
+        TestBridge(LClient, LR);
       end
       else
         WriteLn('FATAL: handshake failed, skipping remaining tests');

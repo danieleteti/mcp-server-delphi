@@ -46,6 +46,7 @@ uses
   MCPTestResourcesU in 'MCPTestResourcesU.pas',
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
   MCPConformanceProvidersU in 'MCPConformanceProvidersU.pas',
+  MCPBridgeTestControllerU in 'MCPBridgeTestControllerU.pas',
   BootConfigU in 'BootConfigU.pas',
   EngineConfigU in 'EngineConfigU.pas';
 

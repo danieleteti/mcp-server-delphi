@@ -23,18 +23,21 @@ implementation
 
 uses
   MVCFramework.MCP.Server,
+  MVCFramework.MCP.Bridge,
   // Test provider units self-register in their initialization sections.
   // Just listing them here is enough to activate the providers.
   MCPTestToolsU,
   MCPTestResourcesU,
   MCPTestPromptsU,
-  MCPConformanceProvidersU;
+  MCPConformanceProvidersU,
+  MCPBridgeTestControllerU;
 
 procedure ConfigureEngine(AEngine: TMVCEngine);
 begin
   // Controllers
   // MCP session termination controller (HTTP DELETE on /mcp) per spec 2025-03-26.
   AEngine.AddController(TMCPSessionController);
+  AEngine.AddController(TMCPBridgeTestController);
   // Controllers - END
 
   // Published objects
@@ -44,6 +47,8 @@ begin
       Result := TMCPServer.Instance.CreatePublishedEndpoint;
     end, '/mcp');
   // Published objects - END
+
+  TMCPServer.Instance.RegisterFromEngine(AEngine, 'http://localhost:8080');
 end;
 
 end.

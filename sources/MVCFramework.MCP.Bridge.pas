@@ -73,7 +73,7 @@ type
   private
     FBaseURL: string;
     FRoutes: TObjectList<TMCPBridgeRouteInfo>;
-    FHttpClient: TNetHTTPClient;
+    FHttpClient: THTTPClient;
     function FindRoute(const AToolName: string): TMCPBridgeRouteInfo;
     function BuildURL(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
     function BuildQueryString(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
@@ -106,7 +106,8 @@ type
 implementation
 
 uses
-  System.IOUtils, System.Rtti, System.NetEncoding;
+  System.IOUtils, System.Rtti, System.NetEncoding,
+  System.Net.URLClient, System.NetConsts, MVCFramework.Logger;
 
 { TMCPBridgeRouteInfo }
 
@@ -132,10 +133,10 @@ begin
   try
     for I := 1 to Length(AName) do
     begin
-      if (I > 1) and (AName[I] in ['A'..'Z']) then
+      if (I > 1) and CharInSet(AName[I], ['A'..'Z']) then
       begin
-        if (AName[I-1] in ['a'..'z']) or
-           ((I < Length(AName)) and (AName[I+1] in ['a'..'z']) and (AName[I-1] in ['A'..'Z'])) then
+        if CharInSet(AName[I-1], ['a'..'z']) or
+           ((I < Length(AName)) and CharInSet(AName[I+1], ['a'..'z']) and CharInSet(AName[I-1], ['A'..'Z'])) then
           LResult.Append('_');
       end;
       LResult.Append(LowerCase(AName[I]));
@@ -333,7 +334,7 @@ begin
               Continue;
 
             LBridgeParam.TypeKind       := LParam.ParamType.TypeKind;
-            LBridgeParam.JsonSchemaType := DelphiTypeToJsonSchema(LParam.ParamType.TypeInfo);
+            LBridgeParam.JsonSchemaType := DelphiTypeToJsonSchema(LParam.ParamType.Handle);
 
             if LIsPathParam then
             begin
@@ -383,7 +384,7 @@ begin
   inherited Create;
   FBaseURL := ABaseURL;
   FRoutes := TObjectList<TMCPBridgeRouteInfo>.Create(True);
-  FHttpClient := TNetHTTPClient.Create(nil);
+  FHttpClient := THTTPClient.Create;
   FHttpClient.ContentType := 'application/json';
   FHttpClient.Accept := 'application/json';
 end;
@@ -571,7 +572,7 @@ begin
   try
     for LPart in LParts do
       if not LPart.IsEmpty then
-        LSB.Append(LPart[1].ToUpper + LPart.Substring(1));
+        LSB.Append(UpperCase(Copy(LPart, 1, 1)) + Copy(LPart, 2, MaxInt));
     Result := LSB.ToString;
   finally
     LSB.Free;
@@ -698,7 +699,7 @@ begin
       LSB.AppendLine('');
       LSB.AppendLine('): TMCPToolResult;');
       LSB.AppendLine('var');
-      LSB.AppendLine('  LClient: TNetHTTPClient;');
+      LSB.AppendLine('  LClient: THTTPClient;');
       LSB.AppendLine('  LResp: IHTTPResponse;');
       LSB.AppendLine('  LURL: string;');
 
@@ -717,7 +718,7 @@ begin
       LSB.AppendLine('begin');
       if LHasBody then
         LSB.AppendLine('  LBodyStream := nil;');
-      LSB.AppendLine('  LClient := TNetHTTPClient.Create(nil);');
+      LSB.AppendLine('  LClient := THTTPClient.Create;');
 
       LURLExpr := 'FBaseURL + ''' + LRoute.PathTemplate + '''';
       for LParam in LRoute.Params do

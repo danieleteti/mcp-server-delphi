@@ -239,7 +239,6 @@ begin
       LRttiType := LCtx.GetType(LDelegate.Clazz);
       if LRttiType = nil then Continue;
 
-      // Get controller base path from [MVCPath] on the class
       LBasePath := '';
       for LAttr in LRttiType.GetAttributes do
         if LAttr is MVCPathAttribute then
@@ -299,73 +298,76 @@ begin
         end;
 
         LRoute := TMCPBridgeRouteInfo.Create;
-        LRoute.ToolName            := LToolName;
-        LRoute.HTTPMethod          := LHTTPMethod;
-        LRoute.PathTemplate        := LFullPath;
-        LRoute.ControllerClassName := LRttiType.Name;
-        if LDocAttr <> nil then
-          LRoute.Description := LDocAttr.Value
-        else
-          LRoute.Description := '';
+        try
+          LRoute.ToolName            := LToolName;
+          LRoute.HTTPMethod          := LHTTPMethod;
+          LRoute.PathTemplate        := LFullPath;
+          LRoute.ControllerClassName := LRttiType.Name;
+          if LDocAttr <> nil then
+            LRoute.Description := LDocAttr.Value
+          else
+            LRoute.Description := '';
 
-        // Scan parameters
-        for LParam in LMethod.GetParameters do
-        begin
-          if LParam.ParamType = nil then Continue;
-
-          LFromQuery := nil;
-          LFromBody  := nil;
-
-          for LParamAttr in LParam.GetAttributes do
+          for LParam in LMethod.GetParameters do
           begin
-            if LParamAttr is MVCFromQueryStringAttribute then
-              LFromQuery := MVCFromQueryStringAttribute(LParamAttr)
-            else if LParamAttr is MVCFromBodyAttribute then
-              LFromBody := MVCFromBodyAttribute(LParamAttr);
+            if LParam.ParamType = nil then Continue;
+
+            LFromQuery := nil;
+            LFromBody  := nil;
+
+            for LParamAttr in LParam.GetAttributes do
+            begin
+              if LParamAttr is MVCFromQueryStringAttribute then
+                LFromQuery := MVCFromQueryStringAttribute(LParamAttr)
+              else if LParamAttr is MVCFromBodyAttribute then
+                LFromBody := MVCFromBodyAttribute(LParamAttr);
+            end;
+
+            // Detect path parameter: ($name) or ($name:type) form
+            LParamSegment := '($' + LParam.Name;
+            LIsPathParam := Pos(LParamSegment + ')', LFullPath) > 0;
+            if not LIsPathParam then
+              LIsPathParam := Pos(LParamSegment + ':', LFullPath) > 0;
+
+            if (not LIsPathParam) and (LFromQuery = nil) and (LFromBody = nil) then
+              Continue;
+
+            LBridgeParam.TypeKind       := LParam.ParamType.TypeKind;
+            LBridgeParam.JsonSchemaType := DelphiTypeToJsonSchema(LParam.ParamType.TypeInfo);
+
+            if LIsPathParam then
+            begin
+              LBridgeParam.Name        := LParam.Name;
+              LBridgeParam.Kind        := bpkPath;
+              LBridgeParam.Required    := True;
+              LBridgeParam.Description := 'Path parameter: ' + LBridgeParam.Name;
+            end
+            else if LFromQuery <> nil then
+            begin
+              LBridgeParam.Name        := LFromQuery.ParamName;
+              LBridgeParam.Kind        := bpkQuery;
+              LBridgeParam.Required    := not LFromQuery.CanBeUsedADefaultValue;
+              LBridgeParam.Description := 'Query parameter: ' + LBridgeParam.Name;
+            end
+            else
+            begin
+              LBridgeParam.Name           := 'body';
+              LBridgeParam.Kind           := bpkBody;
+              LBridgeParam.Required       := True;
+              LBridgeParam.TypeKind       := tkUString;
+              LBridgeParam.JsonSchemaType := 'string';
+              LBridgeParam.Description    := 'Request body (JSON)';
+            end;
+
+            LRoute.Params := LRoute.Params + [LBridgeParam];
           end;
 
-          // Detect path parameter: ($name) or ($name:type) form
-          LParamSegment := '($' + LParam.Name;
-          LIsPathParam := Pos(LParamSegment + ')', LFullPath) > 0;
-          if not LIsPathParam then
-            LIsPathParam := Pos(LParamSegment + ':', LFullPath) > 0;
-
-          if (not LIsPathParam) and (LFromQuery = nil) and (LFromBody = nil) then
-            Continue;  // no binding → skip
-
-          LBridgeParam.TypeKind       := LParam.ParamType.TypeKind;
-          LBridgeParam.JsonSchemaType := DelphiTypeToJsonSchema(LParam.ParamType.TypeInfo);
-
-          if LIsPathParam then
-          begin
-            LBridgeParam.Name        := LParam.Name;
-            LBridgeParam.Kind        := bpkPath;
-            LBridgeParam.Required    := True;
-            LBridgeParam.Description := 'Path parameter: ' + LBridgeParam.Name;
-          end
-          else if LFromQuery <> nil then
-          begin
-            LBridgeParam.Name        := LFromQuery.ParamName;
-            LBridgeParam.Kind        := bpkQuery;
-            LBridgeParam.Required    := not LFromQuery.CanBeUsedADefaultValue;
-            LBridgeParam.Description := 'Query parameter: ' + LBridgeParam.Name;
-          end
-          else  // body
-          begin
-            LBridgeParam.Name           := 'body';
-            LBridgeParam.Kind           := bpkBody;
-            LBridgeParam.Required       := True;
-            LBridgeParam.TypeKind       := tkUString;
-            LBridgeParam.JsonSchemaType := 'string';
-            LBridgeParam.Description    := 'Request body (JSON)';
-          end;
-
-          LRoute.Params := LRoute.Params + [LBridgeParam];
+          Result := Result + [LRoute];
+          LSeenNames.Add(LToolName, LRttiType.Name + '.' + LMethod.Name);
+        except
+          LRoute.Free;
+          raise;
         end;
-
-        Result := Result + [LRoute];
-        LSeenNames.AddOrSetValue(LToolName,
-          LRttiType.Name + '.' + LMethod.Name);
       end;
     end;
   finally

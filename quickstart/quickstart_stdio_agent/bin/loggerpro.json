@@ -1,0 +1,14 @@
+{
+  "configVersion": 1,
+  "minimumLevel": "Info",
+  "defaultTag": "MCP-AGENT",
+  "appenders": [
+    {
+      "type": "File",
+      "logsFolder": "logs",
+      "fileBaseName": "QuickStartStdioAgent",
+      "maxBackupFiles": 5,
+      "maxFileSizeInKB": 10000
+    }
+  ]
+}

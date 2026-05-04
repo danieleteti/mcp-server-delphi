@@ -101,18 +101,86 @@ begin
 end;
 
 function TMCPEngineScanner.CamelToSnake(const AName: string): string;
+var
+  I: Integer;
+  LResult: TStringBuilder;
 begin
-  raise Exception.Create('Not implemented');
+  LResult := TStringBuilder.Create;
+  try
+    for I := 1 to Length(AName) do
+    begin
+      if (I > 1) and (AName[I] in ['A'..'Z']) then
+      begin
+        // Insert underscore if: previous char is lowercase, OR
+        // this char is uppercase and next char is lowercase (handles HTMLParser → html_parser)
+        if (AName[I-1] in ['a'..'z']) or
+           ((I < Length(AName)) and (AName[I+1] in ['a'..'z']) and (AName[I-1] in ['A'..'Z'])) then
+          LResult.Append('_');
+      end;
+      LResult.Append(LowerCase(AName[I]));
+    end;
+    Result := LResult.ToString;
+  finally
+    LResult.Free;
+  end;
 end;
 
 function TMCPEngineScanner.PathToToolName(const AMethod, APath: string): string;
+var
+  LPath: string;
+  LParts: TArray<string>;
+  I: Integer;
+  LPart: string;
+  LResult: TStringBuilder;
 begin
-  raise Exception.Create('Not implemented');
+  LPath := APath;
+  // Remove leading slash
+  if (LPath <> '') and (LPath[1] = '/') then
+    LPath := Copy(LPath, 2, MaxInt);
+
+  LParts := LPath.Split(['/']);
+  LResult := TStringBuilder.Create;
+  try
+    LResult.Append(LowerCase(AMethod));
+    for I := 0 to High(LParts) do
+    begin
+      LPart := LParts[I];
+      if LPart = '' then Continue;
+      LResult.Append('_');
+      // Check if it's a path parameter {varName}
+      if (Length(LPart) >= 3) and (LPart[1] = '{') and (LPart[Length(LPart)] = '}') then
+      begin
+        LResult.Append('by_');
+        LResult.Append(CamelToSnake(Copy(LPart, 2, Length(LPart) - 2)));
+      end
+      else
+        LResult.Append(LPart);
+    end;
+    Result := LResult.ToString;
+  finally
+    LResult.Free;
+  end;
 end;
 
 function TMCPEngineScanner.DelphiTypeToJsonSchema(ATypeInfo: PTypeInfo): string;
 begin
-  raise Exception.Create('Not implemented');
+  if ATypeInfo = nil then
+    Exit('string');
+  case ATypeInfo^.Kind of
+    tkInteger, tkInt64:
+      Result := 'integer';
+    tkFloat:
+      Result := 'number';
+    tkEnumeration:
+      if ATypeInfo = System.TypeInfo(Boolean) then
+        Result := 'boolean'
+      else
+        Result := 'string';
+    tkUString, tkString, tkLString, tkWString:
+      Result := 'string';
+  else
+    Result := 'string';
+  end;
 end;
 
 function TMCPEngineScanner.Scan: TArray<TMCPBridgeRouteInfo>;

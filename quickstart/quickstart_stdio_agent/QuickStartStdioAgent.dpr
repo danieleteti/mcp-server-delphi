@@ -418,12 +418,20 @@ begin
           LSpinner := nil;
         end;
         ShowCursor;
-        // TConsoleSpinner.Hide clears the spinner row but does NOT reset
-        // the foreground colour set by the AColor argument. Without this
-        // explicit reset every WriteLn that follows inherits DarkGray and
-        // the assistant reply renders muted instead of in the terminal's
-        // default colour.
+        // TConsoleSpinner.Hide clears the spinner row but leaves both the
+        // Win32 console attribute AND the GForeGround tracker stuck on
+        // the spinner colour (DarkGray for "thinking..."). We need to
+        // reset BOTH:
+        //   * Style.ResetAll (ANSI) clears any bold/dim/colour escape
+        //     left active in the virtual terminal stream
+        //   * TextColor(White) realigns the lib's GForeGround tracker
+        //     and emits a Win32 SetConsoleTextAttribute. Without this,
+        //     SaveColors/RestoreSavedColors inside WriteSeparator etc.
+        //     captures DarkGray as the "current" colour and merrily
+        //     restores it after every coloured write, dragging the
+        //     entire reply into muted gray.
         Write(Style.ResetAll);
+        TextColor(White);
         Flush(Output);
       end;
 

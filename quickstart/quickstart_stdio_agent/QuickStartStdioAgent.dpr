@@ -418,6 +418,13 @@ begin
           LSpinner := nil;
         end;
         ShowCursor;
+        // TConsoleSpinner.Hide clears the spinner row but does NOT reset
+        // the foreground colour set by the AColor argument. Without this
+        // explicit reset every WriteLn that follows inherits DarkGray and
+        // the assistant reply renders muted instead of in the terminal's
+        // default colour.
+        Write(Style.ResetAll);
+        Flush(Output);
       end;
 
       // Append the assistant message so multi-turn context is preserved.

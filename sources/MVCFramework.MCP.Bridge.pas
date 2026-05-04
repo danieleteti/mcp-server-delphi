@@ -5,10 +5,11 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections,
-  System.Net.HttpClient, System.Rtti, System.TypInfo,
+  System.Net.HttpClient, System.TypInfo,
   MVCFramework,
   MVCFramework.MCP.Server,
-  MVCFramework.MCP.ToolProvider;
+  MVCFramework.MCP.ToolProvider,
+  JsonDataObjects;
 
 type
   EMCPBridgeException = class(Exception);
@@ -31,6 +32,7 @@ type
     PathTemplate: string;
     ControllerClassName: string;
     Params: TArray<TMCPBridgeParamInfo>;
+    destructor Destroy; override;
   end;
 
   TMCPEngineScanner = class
@@ -81,7 +83,14 @@ type
 implementation
 
 uses
-  System.IOUtils;
+  System.IOUtils, System.Rtti;
+
+{ TMCPBridgeRouteInfo }
+
+destructor TMCPBridgeRouteInfo.Destroy;
+begin
+  inherited;
+end;
 
 { TMCPEngineScanner }
 

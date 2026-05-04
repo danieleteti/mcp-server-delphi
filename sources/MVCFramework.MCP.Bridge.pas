@@ -1,4 +1,26 @@
-// *** MVCFramework.MCP.Bridge — GENERATED SCAFFOLD — implementation pending ***
+// ***************************************************************************
+//
+// MCP Server Library for DMVCFramework
+//
+// Copyright (c) 2010-2026 Daniele Teti
+//
+// https://github.com/danieleteti/delphimvcframework
+//
+// ***************************************************************************
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// ***************************************************************************
 unit MVCFramework.MCP.Bridge;
 
 interface
@@ -111,8 +133,6 @@ begin
     begin
       if (I > 1) and (AName[I] in ['A'..'Z']) then
       begin
-        // Insert underscore if: previous char is lowercase, OR
-        // this char is uppercase and next char is lowercase (handles HTMLParser → html_parser)
         if (AName[I-1] in ['a'..'z']) or
            ((I < Length(AName)) and (AName[I+1] in ['a'..'z']) and (AName[I-1] in ['A'..'Z'])) then
           LResult.Append('_');
@@ -134,7 +154,6 @@ var
   LResult: TStringBuilder;
 begin
   LPath := APath;
-  // Remove leading slash
   if (LPath <> '') and (LPath[1] = '/') then
     LPath := Copy(LPath, 2, MaxInt);
 
@@ -147,14 +166,13 @@ begin
       LPart := LParts[I];
       if LPart = '' then Continue;
       LResult.Append('_');
-      // Check if it's a path parameter {varName}
       if (Length(LPart) >= 3) and (LPart[1] = '{') and (LPart[Length(LPart)] = '}') then
       begin
         LResult.Append('by_');
         LResult.Append(CamelToSnake(Copy(LPart, 2, Length(LPart) - 2)));
       end
       else
-        LResult.Append(LPart);
+        LResult.Append(LowerCase(LPart));
     end;
     Result := LResult.ToString;
   finally

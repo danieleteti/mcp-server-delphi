@@ -167,10 +167,15 @@ begin
       LPart := LParts[I];
       if LPart = '' then Continue;
       LResult.Append('_');
-      if (Length(LPart) >= 3) and (LPart[1] = '{') and (LPart[Length(LPart)] = '}') then
+      // DMVCFramework path params use ($name) or ($name:type) syntax
+      if (Length(LPart) >= 4) and (LPart[1] = '(') and (LPart[2] = '$') and (LPart[Length(LPart)] = ')') then
       begin
+        var LVarName := Copy(LPart, 3, Length(LPart) - 3);
+        var LColon := Pos(':', LVarName);
+        if LColon > 0 then
+          LVarName := Copy(LVarName, 1, LColon - 1);
         LResult.Append('by_');
-        LResult.Append(CamelToSnake(Copy(LPart, 2, Length(LPart) - 2)));
+        LResult.Append(CamelToSnake(LVarName));
       end
       else
         LResult.Append(LowerCase(LPart));
@@ -267,13 +272,15 @@ begin
           LActionPath := LPathAttr.Path;
         LFullPath := LBasePath + LActionPath;
 
-        // Get first HTTP method from the attribute
-        // MVCHTTPMethodsAsString returns e.g. 'httpGET' or 'httpGET,httpPOST'
+        // MVCHTTPMethodsAsString returns enum names like 'httpGET,httpPOST'
         LHTTPMethod := LMethodAttr.MVCHTTPMethodsAsString;
         LCommaPos := Pos(',', LHTTPMethod);
         if LCommaPos > 0 then
           LHTTPMethod := Copy(LHTTPMethod, 1, LCommaPos - 1);
         LHTTPMethod := LHTTPMethod.Trim;
+        // Strip 'http' prefix from enum name to get bare 'GET', 'POST', etc.
+        if LHTTPMethod.StartsWith('http', True) then
+          LHTTPMethod := LHTTPMethod.Substring(4).ToUpper;
 
         LToolName := PathToToolName(LHTTPMethod, LFullPath);
 

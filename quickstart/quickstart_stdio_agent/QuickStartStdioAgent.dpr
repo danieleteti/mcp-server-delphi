@@ -221,27 +221,138 @@ begin
   WriteLn;
 end;
 
+// Replaces every paired occurrence of AMarker in AText with AOpen ... AClose.
+// The pairs are matched left-to-right, greedy "next occurrence". Markers
+// inside already-rendered ANSI sequences are not a concern because the
+// LLM never emits raw escape codes.
+function WrapPairs(const AText, AMarker, AOpen, AClose: string): string;
+var
+  LMLen, LP1, LP2, LCursor: Integer;
+  LSB: TStringBuilder;
+begin
+  LMLen := Length(AMarker);
+  if (LMLen = 0) or (Pos(AMarker, AText) = 0) then
+    Exit(AText);
+
+  LSB := TStringBuilder.Create;
+  try
+    LCursor := 1;
+    while LCursor <= Length(AText) do
+    begin
+      LP1 := Pos(AMarker, AText, LCursor);
+      if LP1 = 0 then
+      begin
+        LSB.Append(Copy(AText, LCursor, MaxInt));
+        Break;
+      end;
+      LP2 := Pos(AMarker, AText, LP1 + LMLen);
+      if LP2 = 0 then
+      begin
+        // Unbalanced opener: emit the rest verbatim and stop.
+        LSB.Append(Copy(AText, LCursor, MaxInt));
+        Break;
+      end;
+      LSB.Append(Copy(AText, LCursor, LP1 - LCursor));        // text before
+      LSB.Append(AOpen);
+      LSB.Append(Copy(AText, LP1 + LMLen, LP2 - LP1 - LMLen)); // text inside
+      LSB.Append(AClose);
+      LCursor := LP2 + LMLen;
+    end;
+    Result := LSB.ToString;
+  finally
+    LSB.Free;
+  end;
+end;
+
+// Strips a leading "# ", "## ", "### " ... heading marker from a line and
+// returns the bare title. Returns '' if ALine is not a heading.
+function HeadingTitle(const ALine: string): string;
+var
+  I, N: Integer;
+begin
+  Result := '';
+  N := Length(ALine);
+  I := 1;
+  while (I <= N) and (ALine[I] = '#') do
+    Inc(I);
+  if (I = 1) or (I > N) or (ALine[I] <> ' ') then
+    Exit;
+  Result := Trim(Copy(ALine, I + 1, MaxInt));
+end;
+
+// Tiny inline-markdown -> ANSI renderer for the assistant's text. We
+// deliberately handle only what LLMs commonly emit:
+//   **strong**            -> bright (bold)
+//   `inline code`         -> cyan
+//   # / ## / ### heading  -> bright on its own line
+// Anything else passes through unchanged. Marker characters never reach
+// the user.
+function RenderMarkdown(const AText: string): string;
+const
+  // Use the granular Style/Fore constants (NOT Style.ResetAll) so closing
+  // one style doesn't accidentally clear another that's still meant to
+  // be active - e.g. inline `code` inside a **bold** span.
+  BOLD_OPEN  = Style.Bright;     // ESC[1m
+  BOLD_CLOSE = Style.Normal;     // ESC[22m - cancel Bold/Dim, keep colour
+  CODE_OPEN  = Fore.Cyan;        // ESC[36m
+  CODE_CLOSE = Fore.Reset;       // ESC[39m - default foreground, keep intensity
+var
+  LLines: TArray<string>;
+  LSB: TStringBuilder;
+  I: Integer;
+  LLine, LTitle: string;
+begin
+  LLines := AText.Split([sLineBreak]);
+  LSB := TStringBuilder.Create;
+  try
+    for I := 0 to High(LLines) do
+    begin
+      LLine := LLines[I];
+      LTitle := HeadingTitle(LLine);
+      if LTitle <> '' then
+        LLine := BOLD_OPEN + LTitle + BOLD_CLOSE
+      else
+      begin
+        LLine := WrapPairs(LLine, '**', BOLD_OPEN, BOLD_CLOSE);
+        LLine := WrapPairs(LLine, '`',  CODE_OPEN, CODE_CLOSE);
+      end;
+      if I > 0 then
+        LSB.AppendLine;
+      LSB.Append(LLine);
+    end;
+    Result := LSB.ToString;
+  finally
+    LSB.Free;
+  end;
+end;
+
 procedure DrawAssistantReply(const AContent: string;
   AToolCount, APromptTokens, ACompletionTokens, ATotalTokens: Integer);
 var
   LContent: string;
 begin
-  // Minimal layout: colored label + plain content + stats line. We rely
-  // on the terminal's own line wrapping for long content. Box() was
-  // attempted but its column tracking drifts on multi-line text with
-  // mixed widths and non-ASCII characters, producing offset right
-  // borders. A plain label is more honest and never breaks.
+  // Minimal, robust layout: a thin separator + colored "Assistant:" label,
+  // then the LLM content with markdown markers (**bold**, `code`, # heading)
+  // rendered as ANSI styling instead of being shown raw, then a closing
+  // separator and the muted stats line. We rely on the terminal's own
+  // line wrapping for long content - Box() was tried first but its column
+  // tracking drifts on multi-line non-ASCII text and the right border ends
+  // up at varying columns.
   if Trim(AContent) = '' then
     LContent := '(empty reply)'
   else
-    LContent := AContent;
+    LContent := RenderMarkdown(AContent);
 
   WriteLn;
-  WriteLn(Style.Bright + Fore.Cyan + 'Assistant:' + RESET);
+  WriteSeparator(BOX_WIDTH, '-');
+  WriteLn(Style.Bright + Fore.Cyan + ' Assistant' + RESET);
+  WriteSeparator(BOX_WIDTH, '-');
+  WriteLn;
   WriteLn(LContent);
   WriteLn;
+  WriteSeparator(BOX_WIDTH, '-');
   WriteLn(MUTED +
-    Format('  tools: %d   tokens: %d (prompt %d, completion %d)',
+    Format(' tools: %d   tokens: %d (prompt %d, completion %d)',
       [AToolCount, ATotalTokens, APromptTokens, ACompletionTokens]) + RESET);
   WriteLn;
 end;

@@ -84,3 +84,12 @@ modules/
 /tests/testproject/build_output.txt
 /tests/testproject/build.bat
 /**/__pycache__/
+/docs/superpowers/*
+*.res
+
+# Local environment files: may contain LLM API keys, DB passwords, etc.
+# Always tracked: bin/.env.example (template, no secrets).
+# Never tracked: bin/.env (developer's actual config).
+**/bin/.env
+**/bin/.env.test
+**/bin/.env.prod

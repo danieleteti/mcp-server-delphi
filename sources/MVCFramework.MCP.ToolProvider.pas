@@ -144,10 +144,39 @@ type
     property IsError: Boolean read FIsError;
   end;
 
+  { Lightweight parameter descriptor for dynamically-registered tools.
+    The scanner pre-computes JsonSchemaType to avoid needing PTypeInfo at
+    registration time (which TMCPServer.RegisterDynamicProvider doesn't have). }
+  TMCPDynamicParamDef = record
+    Name: string;
+    Description: string;
+    Required: Boolean;
+    TypeKind: TTypeKind;
+    JsonSchemaType: string;
+  end;
+
+  { Tool descriptor for dynamically-registered tools (no RTTI method). }
+  TMCPDynamicToolDef = record
+    Name: string;
+    Description: string;
+    ControllerClassName: string; // for code-gen grouping
+    Params: TArray<TMCPDynamicParamDef>;
+  end;
+
   TMCPToolProvider = class
   public
     constructor Create; virtual;
     destructor Destroy; override;
+
+    { Override to return tool definitions for dynamic (non-RTTI) registration.
+      Default returns empty — existing providers are unaffected. }
+    function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; virtual;
+
+    { Override to handle invocation for dynamic tools.
+      Called by DoToolsCall when TMCPToolInfo.HandlerInstance is set.
+      Default raises Exception('not implemented'). }
+    function InvokeDynamic(const AToolName: string;
+      AArguments: TJDOJsonObject): TMCPToolResult; virtual;
   end;
 
   TMCPToolProviderClass = class of TMCPToolProvider;
@@ -439,6 +468,17 @@ end;
 destructor TMCPToolProvider.Destroy;
 begin
   inherited;
+end;
+
+function TMCPToolProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
+begin
+  Result := nil;
+end;
+
+function TMCPToolProvider.InvokeDynamic(const AToolName: string;
+  AArguments: TJDOJsonObject): TMCPToolResult;
+begin
+  raise Exception.Create('InvokeDynamic not implemented');
 end;
 
 end.

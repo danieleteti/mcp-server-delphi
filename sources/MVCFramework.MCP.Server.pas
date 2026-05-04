@@ -147,7 +147,9 @@ type
     procedure RegisterPromptProvider(AProviderClass: TMCPPromptProviderClass);
 
     { Registers a pre-built provider instance. Tools come from
-      AProvider.GetDynamicToolDefs. TMCPServer takes ownership of AProvider. }
+      AProvider.GetDynamicToolDefs. TMCPServer takes ownership of AProvider.
+      Must be called during startup before serving requests (same constraint
+      as RegisterToolProvider — registry is immutable once requests begin). }
     procedure RegisterDynamicProvider(AProvider: TMCPToolProvider);
 
     { Creates a published endpoint for use with TMVCEngine.PublishObject }

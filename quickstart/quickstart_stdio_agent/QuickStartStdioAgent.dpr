@@ -221,88 +221,25 @@ begin
   WriteLn;
 end;
 
-// Hard-wraps a multi-line string at AMaxWidth, splitting on word boundaries
-// and preserving blank lines. Box() renders one input string per row and
-// does NOT word-wrap; if a line is wider than the inner box width the
-// right border is pushed off-screen and subsequent rows desync. Always
-// pre-wrap LLM output (which can produce long markdown lines) before
-// handing it to Box.
-function WrapLines(const AText: string; AMaxWidth: Integer): TStringArray;
-var
-  LParagraphs: TArray<string>;
-  LBuf: TList<string>;
-  LWords: TArray<string>;
-  LCurrent, LWord: string;
-  I: Integer;
-  LLine: string;
-begin
-  if AMaxWidth < 8 then
-    AMaxWidth := 8;
-  LParagraphs := AText.Split([sLineBreak]);
-  LBuf := TList<string>.Create;
-  try
-    for LLine in LParagraphs do
-    begin
-      if Length(LLine) <= AMaxWidth then
-      begin
-        LBuf.Add(LLine);
-        Continue;
-      end;
-      // Split on spaces and re-flow word by word.
-      LWords := LLine.Split([' ']);
-      LCurrent := '';
-      for I := 0 to High(LWords) do
-      begin
-        LWord := LWords[I];
-        // A single word longer than the budget gets force-broken so
-        // the box never overflows.
-        while Length(LWord) > AMaxWidth do
-        begin
-          if LCurrent <> '' then
-          begin
-            LBuf.Add(LCurrent);
-            LCurrent := '';
-          end;
-          LBuf.Add(Copy(LWord, 1, AMaxWidth));
-          LWord := Copy(LWord, AMaxWidth + 1, MaxInt);
-        end;
-        if LCurrent = '' then
-          LCurrent := LWord
-        else if Length(LCurrent) + 1 + Length(LWord) <= AMaxWidth then
-          LCurrent := LCurrent + ' ' + LWord
-        else
-        begin
-          LBuf.Add(LCurrent);
-          LCurrent := LWord;
-        end;
-      end;
-      if LCurrent <> '' then
-        LBuf.Add(LCurrent);
-    end;
-    // TStringArray (MVCFramework.Console) is a distinct type from
-    // TArray<string>; copy element-by-element instead of returning
-    // LBuf.ToArray (which would be a TArray<string>).
-    SetLength(Result, LBuf.Count);
-    for I := 0 to LBuf.Count - 1 do
-      Result[I] := LBuf[I];
-  finally
-    LBuf.Free;
-  end;
-end;
-
 procedure DrawAssistantReply(const AContent: string;
   AToolCount, APromptTokens, ACompletionTokens, ATotalTokens: Integer);
 var
-  LSA: TStringArray;
+  LContent: string;
 begin
-  WriteLn;
+  // Minimal layout: colored label + plain content + stats line. We rely
+  // on the terminal's own line wrapping for long content. Box() was
+  // attempted but its column tracking drifts on multi-line text with
+  // mixed widths and non-ASCII characters, producing offset right
+  // borders. A plain label is more honest and never breaks.
   if Trim(AContent) = '' then
-    LSA := ['(empty reply)']
+    LContent := '(empty reply)'
   else
-    // BOX_WIDTH is the total box width; subtract 4 for the two borders +
-    // the one-space inner padding on each side that Box() inserts.
-    LSA := WrapLines(AContent, BOX_WIDTH - 4);
-  Box('Assistant', LSA, BOX_WIDTH);
+    LContent := AContent;
+
+  WriteLn;
+  WriteLn(Style.Bright + Fore.Cyan + 'Assistant:' + RESET);
+  WriteLn(LContent);
+  WriteLn;
   WriteLn(MUTED +
     Format('  tools: %d   tokens: %d (prompt %d, completion %d)',
       [AToolCount, ATotalTokens, APromptTokens, ACompletionTokens]) + RESET);

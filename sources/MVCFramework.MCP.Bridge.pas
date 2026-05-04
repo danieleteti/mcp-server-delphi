@@ -44,6 +44,7 @@ type
     Required: Boolean;
     Kind: TMCPBridgeParamKind;
     JsonSchemaType: string;
+    TypeKind: TTypeKind;
   end;
 
   TMCPBridgeRouteInfo = class
@@ -202,8 +203,166 @@ begin
 end;
 
 function TMCPEngineScanner.Scan: TArray<TMCPBridgeRouteInfo>;
+var
+  LCtx: TRttiContext;
+  LDelegate: TMVCControllerDelegate;
+  LRttiType: TRttiType;
+  LMethod: TRttiMethod;
+  LAttr, LParamAttr: TCustomAttribute;
+  LPathAttr: MVCPathAttribute;
+  LMethodAttr: MVCHTTPMethodsAttribute;
+  LDocAttr: MVCDocAttribute;
+  LBasePath, LActionPath, LFullPath, LHTTPMethod: string;
+  LRoute: TMCPBridgeRouteInfo;
+  LParam: TRttiParameter;
+  LBridgeParam: TMCPBridgeParamInfo;
+  LFromQuery: MVCFromQueryStringAttribute;
+  LFromBody: MVCFromBodyAttribute;
+  LToolName: string;
+  LSeenNames: TDictionary<string, string>;
+  LPrefixedName: string;
+  LCommaPos: Integer;
+  LParamSegment: string;
+  LIsPathParam: Boolean;
 begin
-  raise Exception.Create('Not implemented');
+  Result := nil;
+  LSeenNames := TDictionary<string, string>.Create;
+  LCtx := TRttiContext.Create;
+  try
+    for LDelegate in FEngine.Controllers do
+    begin
+      LRttiType := LCtx.GetType(LDelegate.Clazz);
+      if LRttiType = nil then Continue;
+
+      // Get controller base path from [MVCPath] on the class
+      LBasePath := '';
+      for LAttr in LRttiType.GetAttributes do
+        if LAttr is MVCPathAttribute then
+        begin
+          LBasePath := MVCPathAttribute(LAttr).Path;
+          Break;
+        end;
+      if LBasePath = '' then Continue;  // skip controllers without [MVCPath]
+
+      for LMethod in LRttiType.GetMethods do
+      begin
+        LMethodAttr := nil;
+        LPathAttr   := nil;
+        LDocAttr    := nil;
+
+        for LAttr in LMethod.GetAttributes do
+        begin
+          if LAttr is MVCHTTPMethodsAttribute then
+            LMethodAttr := MVCHTTPMethodsAttribute(LAttr)
+          else if LAttr is MVCPathAttribute then
+            LPathAttr := MVCPathAttribute(LAttr)
+          else if LAttr is MVCDocAttribute then
+            LDocAttr := MVCDocAttribute(LAttr);
+        end;
+
+        if LMethodAttr = nil then Continue;  // not an action
+
+        LActionPath := '';
+        if LPathAttr <> nil then
+          LActionPath := LPathAttr.Path;
+        LFullPath := LBasePath + LActionPath;
+
+        // Get first HTTP method from the attribute
+        // MVCHTTPMethodsAsString returns e.g. 'httpGET' or 'httpGET,httpPOST'
+        LHTTPMethod := LMethodAttr.MVCHTTPMethodsAsString;
+        LCommaPos := Pos(',', LHTTPMethod);
+        if LCommaPos > 0 then
+          LHTTPMethod := Copy(LHTTPMethod, 1, LCommaPos - 1);
+        LHTTPMethod := LHTTPMethod.Trim;
+
+        LToolName := PathToToolName(LHTTPMethod, LFullPath);
+
+        // Collision detection
+        if LSeenNames.ContainsKey(LToolName) then
+        begin
+          LPrefixedName := CamelToSnake(LRttiType.Name) + '_' + LToolName;
+          if LSeenNames.ContainsKey(LPrefixedName) then
+            raise EMCPBridgeException.CreateFmt(
+              'MCPBridge: duplicate tool name "%s" (prefixed: "%s") is already taken. ' +
+              'Conflicting actions: %s and %s.%s',
+              [LToolName, LPrefixedName,
+               LSeenNames[LToolName],
+               LRttiType.Name, LMethod.Name]);
+          LToolName := LPrefixedName;
+        end;
+
+        LRoute := TMCPBridgeRouteInfo.Create;
+        LRoute.ToolName            := LToolName;
+        LRoute.HTTPMethod          := LHTTPMethod;
+        LRoute.PathTemplate        := LFullPath;
+        LRoute.ControllerClassName := LRttiType.Name;
+        if LDocAttr <> nil then
+          LRoute.Description := LDocAttr.Value
+        else
+          LRoute.Description := '';
+
+        // Scan parameters
+        for LParam in LMethod.GetParameters do
+        begin
+          if LParam.ParamType = nil then Continue;
+
+          LFromQuery := nil;
+          LFromBody  := nil;
+
+          for LParamAttr in LParam.GetAttributes do
+          begin
+            if LParamAttr is MVCFromQueryStringAttribute then
+              LFromQuery := MVCFromQueryStringAttribute(LParamAttr)
+            else if LParamAttr is MVCFromBodyAttribute then
+              LFromBody := MVCFromBodyAttribute(LParamAttr);
+          end;
+
+          // Detect path parameter: parameter name matches ($name) segment in path
+          LParamSegment := '($' + LParam.Name + ')';
+          LIsPathParam := Pos(LParamSegment, LFullPath) > 0;
+
+          if (not LIsPathParam) and (LFromQuery = nil) and (LFromBody = nil) then
+            Continue;  // no binding → skip
+
+          LBridgeParam.TypeKind       := LParam.ParamType.TypeKind;
+          LBridgeParam.JsonSchemaType := DelphiTypeToJsonSchema(LParam.ParamType.TypeInfo);
+
+          if LIsPathParam then
+          begin
+            LBridgeParam.Name        := LParam.Name;
+            LBridgeParam.Kind        := bpkPath;
+            LBridgeParam.Required    := True;
+            LBridgeParam.Description := 'Path parameter: ' + LBridgeParam.Name;
+          end
+          else if LFromQuery <> nil then
+          begin
+            LBridgeParam.Name        := LFromQuery.ParamName;
+            LBridgeParam.Kind        := bpkQuery;
+            LBridgeParam.Required    := not LFromQuery.CanBeUsedADefaultValue;
+            LBridgeParam.Description := 'Query parameter: ' + LBridgeParam.Name;
+          end
+          else  // body
+          begin
+            LBridgeParam.Name           := 'body';
+            LBridgeParam.Kind           := bpkBody;
+            LBridgeParam.Required       := True;
+            LBridgeParam.TypeKind       := tkUString;
+            LBridgeParam.JsonSchemaType := 'string';
+            LBridgeParam.Description    := 'Request body (JSON)';
+          end;
+
+          LRoute.Params := LRoute.Params + [LBridgeParam];
+        end;
+
+        Result := Result + [LRoute];
+        LSeenNames.AddOrSetValue(LToolName,
+          LRttiType.Name + '.' + LMethod.Name);
+      end;
+    end;
+  finally
+    LSeenNames.Free;
+    LCtx.Free;
+  end;
 end;
 
 { TMCPBridgeProvider }

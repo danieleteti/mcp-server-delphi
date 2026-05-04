@@ -33,7 +33,8 @@ uses
   System.Classes,
   System.JSON,
   System.Generics.Collections,  // expand TJSONArray.GetValue inline calls
-  MVCFramework.MCP.Client;
+  MVCFramework.MCP.Client,
+  MVCFramework.MCP.Client.Stdio;
 
 type
   TTestRunner = class
@@ -119,27 +120,50 @@ begin
     end;
 end;
 
+// Returns the stdio command (full command line) when --stdio-cmd is passed,
+// or '' when not present. When set, the test runs over stdio against the
+// supplied executable instead of HTTP.
+function ParseStdioCmd: string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to ParamCount do
+    if SameText(ParamStr(I), '--stdio-cmd') and (I < ParamCount) then
+    begin
+      Result := ParamStr(I + 1);
+      Exit;
+    end;
+end;
+
 // ──────────────────────────────────────────────────────────────────────────
 // Test cases
 // ──────────────────────────────────────────────────────────────────────────
 
-procedure TestInitialize(AClient: TMCPClient; AR: TTestRunner);
+procedure TestInitialize(AClient: TMCPClientBase; AR: TTestRunner);
 begin
   AR.Section('Initialize');
   try
     AClient.Initialize;
-    if AClient.SessionID <> '' then
-      AR.Ok(Format('handshake → session %s...',
-        [Copy(AClient.SessionID, 1, 16)]))
+    // Session-id capture is HTTP-specific (transport header). For stdio
+    // the handshake just has to not raise.
+    if AClient is TMCPClient then
+    begin
+      if TMCPClient(AClient).SessionID <> '' then
+        AR.Ok(Format('handshake → session %s...',
+          [Copy(TMCPClient(AClient).SessionID, 1, 16)]))
+      else
+        AR.Fail('handshake', 'session id not captured from response header');
+    end
     else
-      AR.Fail('handshake', 'session id not captured from response header');
+      AR.Ok('handshake (stdio) completed without raising');
   except
     on E: Exception do
       AR.Fail('handshake', E.ClassName + ': ' + E.Message);
   end;
 end;
 
-procedure TestTools(AClient: TMCPClient; AR: TTestRunner);
+procedure TestTools(AClient: TMCPClientBase; AR: TTestRunner);
 var
   LTools: TJSONArray;
   LTool: TJSONObject;
@@ -223,7 +247,7 @@ begin
   end;
 end;
 
-procedure TestResources(AClient: TMCPClient; AR: TTestRunner);
+procedure TestResources(AClient: TMCPClientBase; AR: TTestRunner);
 var
   LRes: TJSONArray;
   LMime, LText: string;
@@ -284,7 +308,7 @@ begin
   end;
 end;
 
-procedure TestResourceTemplates(AClient: TMCPClient; AR: TTestRunner);
+procedure TestResourceTemplates(AClient: TMCPClientBase; AR: TTestRunner);
 var
   LTpls: TJSONArray;
   LMime, LText: string;
@@ -372,7 +396,7 @@ begin
   end;
 end;
 
-procedure TestPrompts(AClient: TMCPClient; AR: TTestRunner);
+procedure TestPrompts(AClient: TMCPClientBase; AR: TTestRunner);
 var
   LPrompts, LMessages: TJSONArray;
   LArgs: TJSONObject;
@@ -432,25 +456,44 @@ end;
 // ──────────────────────────────────────────────────────────────────────────
 
 var
-  LURL: string;
-  LClient: TMCPClient;
+  LURL, LStdioCmd: string;
+  LClient: TMCPClientBase;
   LR: TTestRunner;
-  LSuccess: Boolean;
+  LSuccess, LCanRun: Boolean;
 begin
   ReportMemoryLeaksOnShutdown := True;
-  LURL := ParseURL;
+  LStdioCmd := ParseStdioCmd;
+
   WriteLn('TMCPClient compliance test');
-  WriteLn('Target: ', LURL);
+  if LStdioCmd <> '' then
+  begin
+    WriteLn('Transport: stdio');
+    WriteLn('Command  : ', LStdioCmd);
+    LClient := TMCPStdioClient.Create(LStdioCmd);
+  end
+  else
+  begin
+    LURL := ParseURL;
+    WriteLn('Transport: HTTP');
+    WriteLn('Target   : ', LURL);
+    LClient := TMCPClient.Create(LURL);
+  end;
   WriteLn(StringOfChar('=', 60));
 
   LR := TTestRunner.Create;
-  LClient := TMCPClient.Create(LURL);
   try
     LClient.ClientName := 'TMCPClientTest';
     try
       TestInitialize(LClient, LR);
-      // The remaining tests need a session: skip them if Initialize failed.
-      if LClient.SessionID <> '' then
+
+      // For HTTP we gate the remaining tests on a captured session.
+      // For stdio we just check Initialize did not raise (LR.Failed unchanged).
+      if LClient is TMCPClient then
+        LCanRun := TMCPClient(LClient).SessionID <> ''
+      else
+        LCanRun := LR.Failed = 0;
+
+      if LCanRun then
       begin
         TestTools(LClient, LR);
         TestResources(LClient, LR);
@@ -458,7 +501,7 @@ begin
         TestPrompts(LClient, LR);
       end
       else
-        WriteLn('FATAL: no session, skipping remaining tests');
+        WriteLn('FATAL: handshake failed, skipping remaining tests');
     except
       on E: Exception do
       begin

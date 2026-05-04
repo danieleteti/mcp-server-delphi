@@ -22,9 +22,9 @@
    ## Features
 
    - **MCP Protocol 2025-03-26** compliant
-   - **Server, client AND agent**: build MCP servers, consume them with `TMCPClient`, and drive them from any OpenAI-compatible LLM via `TMCPOpenAIAgent` (works with OpenAI, OpenRouter, Anthropic-compat, Together, Groq, Ollama, vLLM, llama.cpp `--api`)
+   - **Server, client AND agent**: build MCP servers, consume them with `TMCPClient` (HTTP) or `TMCPStdioClient` (subprocess + pipes), and drive them from any OpenAI-compatible LLM via `TMCPOpenAIAgent` (works with OpenAI, OpenRouter, Anthropic-compat, Together, Groq, Ollama, vLLM, llama.cpp `--api`)
    - **Attribute-driven** tool/resource/prompt registration using RTTI
-   - **Dual transport**: Streamable HTTP and stdio (select via `--transport http|stdio`)
+   - **Dual transport**, server AND client side: Streamable HTTP and stdio
    - **Session management** with automatic cleanup
    - **Type-safe** parameter binding with automatic JSON schema generation
    - **Multiple content types**: Text, Image (base64), Audio (base64), Embedded Resources
@@ -34,12 +34,13 @@
 
    ## Quick Start
 
-   The fastest way to get started is to **copy a Quick Start sample** and customize it. Two projects are available — pick the one that fits your deployment:
+   The fastest way to get started is to **copy a Quick Start sample** and customize it. Three projects are available — pick the one that fits your deployment:
 
-   | Project | Transport | Requires TaurusTLS | Use when |
-   |---------|-----------|-------------------|----------|
-   | [`quickstart/quickstart/`](quickstart/quickstart/) | HTTP + stdio | Yes | You want a network server that AI clients connect to via HTTP |
-   | [`quickstart/quickstart_stdio/`](quickstart/quickstart_stdio/) | stdio only | **No** | You want the AI client (e.g. Claude Desktop) to launch the server locally |
+   | Project | Role | Transport | Requires TaurusTLS | Use when |
+   |---------|------|-----------|-------------------|----------|
+   | [`quickstart/quickstart/`](quickstart/quickstart/) | Server | HTTP + stdio | Yes | You want a network server that AI clients connect to via HTTP |
+   | [`quickstart/quickstart_stdio/`](quickstart/quickstart_stdio/) | Server | stdio only | **No** | You want the AI client (e.g. Claude Desktop) to launch the server locally |
+   | [`quickstart/quickstart_stdio_agent/`](quickstart/quickstart_stdio_agent/) | **Agent (host+client)** | stdio | **No** | You want a Delphi-side AI agent that spawns and consumes a stdio MCP server, driven by an OpenAI-compatible LLM |
 
    Both projects share the **same provider units** in [`quickstart/shared/`](quickstart/shared/) — you write your tools, resources, and prompts once and both transports use them.
 
@@ -311,7 +312,7 @@
    Three independent compliance suites cover the full library:
 
    - **Python compliance suite** (`tests/test_mcp_server.py`) — 151 test cases exercising the server end-to-end over Streamable HTTP. Validates JSON-RPC 2.0, MCP protocol, session lifecycle, all `TMCPToolResult` content types, URI templates and error handling.
-   - **TMCPClient suite** (`tests/clientproject/`) — 17 Delphi test cases that drive the new client (`MVCFramework.MCP.Client`) against the running test server: handshake, tools, static + templated resources, prompts, JSON-RPC error envelope handling.
+   - **TMCPClient suite** (`tests/clientproject/`) — 17 Delphi test cases that drive the client against the running test server. Runs **twice**: once over Streamable HTTP (`TMCPClient`) and once over stdio (`TMCPStdioClient` spawning the same testproject exe in stdio mode). Same test code, transport switched via `--stdio-cmd`. Covers: handshake, tools, static + templated resources, prompts, JSON-RPC error envelope handling.
    - **TMCPOpenAIAgent suite** (`tests/agentproject/`) — 8 Delphi test cases that exercise the agent loop (`MVCFramework.MCP.OpenAIAgent`) end-to-end. Embeds a deterministic fake LLM (a DMVCFramework controller responding to `/v1/chat/completions`) so the loop can be validated without external network dependencies. Covers single-tool dispatch, token accounting, system prompt prepending, OpenRouter analytics headers, and the `MaxTurns` safety net.
 
    The test project (`tests/testproject/`) registers providers that exercise **every feature** of the server library:
@@ -375,8 +376,9 @@
    ├── sources/                                     # Core library
    │   ├── MVCFramework.MCP.Server.pas              # Server registry and endpoint
    │   ├── MVCFramework.MCP.RequestHandler.pas      # Transport-agnostic MCP dispatch
-   │   ├── MVCFramework.MCP.Client.pas              # MCP client over Streamable HTTP
-   │   ├── MVCFramework.MCP.OpenAIAgent.pas         # Agent loop: OpenAI-compat LLM + MCP tools
+   │   ├── MVCFramework.MCP.Client.pas              # MCP client over Streamable HTTP (TMCPClient + abstract TMCPClientBase)
+   │   ├── MVCFramework.MCP.Client.Stdio.pas        # MCP client over stdio (subprocess + pipes)
+   │   ├── MVCFramework.MCP.OpenAIAgent.pas         # Agent loop: OpenAI-compat LLM + MCP tools (any transport)
    │   ├── MVCFramework.MCP.Stdio.pas               # stdio transport (stdin/stdout)
    │   ├── MVCFramework.MCP.TransportConf.pas       # Early transport detection
    │   ├── MVCFramework.MCP.Attributes.pas          # Custom attributes
@@ -390,11 +392,14 @@
    │   │   ├── ToolProviderU.pas                    # Example tools
    │   │   ├── ResourceProviderU.pas                # Example resources
    │   │   └── PromptProviderU.pas                  # Example prompts
-   │   ├── quickstart/                              # HTTP + stdio project (Indy Direct)
+   │   ├── quickstart/                              # HTTP + stdio server (Indy Direct)
    │   │   ├── QuickStart.dpr/.dproj                # Console app
    │   │   └── bin/.env                             # Server port configuration
-   │   └── quickstart_stdio/                        # stdio-only project (no TaurusTLS)
-   │       └── QuickStartStdio.dpr/.dproj           # Lightweight console app
+   │   ├── quickstart_stdio/                        # stdio-only server (no TaurusTLS)
+   │   │   └── QuickStartStdio.dpr/.dproj           # Lightweight console app
+   │   └── quickstart_stdio_agent/                  # ★ Agent that spawns & consumes a stdio server
+   │       ├── QuickStartStdioAgent.dpr/.dproj      # Delphi-side AI agent (REPL)
+   │       └── bin/.env.example                     # LLM key + model + server command
    ├── sample/                                      # Full-featured example (wizard-style layout)
    │   ├── MCPServerSample.dpr                      # Slim entry point (HTTP + stdio + HTTPS)
    │   ├── BootConfigU.pas                          # dotEnv + LoggerPro + profiler

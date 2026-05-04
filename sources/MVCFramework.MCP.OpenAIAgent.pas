@@ -125,6 +125,8 @@ type
     FResponseTimeoutMs: Integer;
     FConnectionTimeoutMs: Integer;
     FHTTP: THTTPClient;
+    FMCPClient: TMCPClientBase;
+    FOwnsMCPClient: Boolean;
 
     // Builds the chat/completions payload, posts it, and returns the parsed
     // response. Ownership of the result is transferred to the caller.
@@ -137,11 +139,14 @@ type
     // Executes every tool call requested by the LLM in a single turn and
     // appends their results to AWorking as role:"tool" messages.
     procedure DispatchToolCalls(AToolCalls: TJSONArray;
-      AMCP: TMCPClient; AWorking: TJSONArray; var AStats: TMCPAgentResult);
+      AMCP: TMCPClientBase; AWorking: TJSONArray; var AStats: TMCPAgentResult);
   public
     // Constructor takes the four essentials. Use properties for the rest.
     // ABaseURL defaults to OpenAI's public endpoint; override for OpenRouter,
-    // Anthropic-compat, Ollama, etc.
+    // Anthropic-compat, Ollama, etc. The default transport is HTTP — Run
+    // creates a fresh TMCPClient(MCPURL) for every call. To use a different
+    // transport (e.g. stdio), inject a pre-built client via SetMCPClient
+    // BEFORE Run.
     constructor Create(const AMCPURL, AAPIKey, AModel: string;
       const ABaseURL: string = 'https://api.openai.com/v1');
     destructor Destroy; override;
@@ -150,6 +155,13 @@ type
     // single role:"user" message). AMessages is NOT consumed — the agent
     // clones what it needs.
     function Run(AMessages: TJSONArray): TMCPAgentResult;
+
+    // Inject an already-built client (e.g. a TMCPStdioClient that wraps a
+    // child-process server) so Run uses it instead of creating a fresh
+    // TMCPClient from MCPURL. When AOwns is True the agent will Free the
+    // client on its own destruction; when False the caller stays in charge
+    // of the lifecycle.
+    procedure SetMCPClient(AClient: TMCPClientBase; AOwns: Boolean);
 
     // ---- Configuration ------------------------------------------------------
 
@@ -198,6 +210,8 @@ begin
   FXTitle              := '';
   FResponseTimeoutMs   := 300000;
   FConnectionTimeoutMs := 10000;
+  FMCPClient           := nil;
+  FOwnsMCPClient       := False;
 
   FHTTP := THTTPClient.Create;
   FHTTP.ResponseTimeout   := FResponseTimeoutMs;
@@ -206,8 +220,19 @@ end;
 
 destructor TMCPOpenAIAgent.Destroy;
 begin
+  if FOwnsMCPClient and Assigned(FMCPClient) then
+    FMCPClient.Free;
   FHTTP.Free;
   inherited;
+end;
+
+procedure TMCPOpenAIAgent.SetMCPClient(AClient: TMCPClientBase; AOwns: Boolean);
+begin
+  // If we previously owned a different client, free it before swapping.
+  if FOwnsMCPClient and Assigned(FMCPClient) and (FMCPClient <> AClient) then
+    FMCPClient.Free;
+  FMCPClient := AClient;
+  FOwnsMCPClient := AOwns;
 end;
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -347,7 +372,7 @@ end;
 // ──────────────────────────────────────────────────────────────────────────
 
 procedure TMCPOpenAIAgent.DispatchToolCalls(AToolCalls: TJSONArray;
-  AMCP: TMCPClient; AWorking: TJSONArray; var AStats: TMCPAgentResult);
+  AMCP: TMCPClientBase; AWorking: TJSONArray; var AStats: TMCPAgentResult);
 var
   I: Integer;
   LToolCallObj, LFunc, LToolMsg, LArgsObj: TJSONObject;
@@ -414,7 +439,8 @@ end;
 
 function TMCPOpenAIAgent.Run(AMessages: TJSONArray): TMCPAgentResult;
 var
-  LMCP: TMCPClient;
+  LMCP: TMCPClientBase;
+  LOwnedHere: Boolean;
   LWorking, LToolsRaw, LTools: TJSONArray;
   I, LTurn: Integer;
   LResp, LChoice, LMessage, LUsage, LSystemMsg, LAssistMsg: TJSONObject;
@@ -431,8 +457,20 @@ begin
   Result.TotalTokens      := 0;
   Result.ToolCallCount    := 0;
 
-  // 1. MCP connection + handshake.
-  LMCP := TMCPClient.Create(FMCPURL);
+  // 1. MCP client. Use the injected one if the caller set it via
+  //    SetMCPClient (e.g. a TMCPStdioClient that wraps a child process);
+  //    otherwise spin up a fresh HTTP TMCPClient pointing at FMCPURL — the
+  //    backward-compatible behaviour.
+  if Assigned(FMCPClient) then
+  begin
+    LMCP := FMCPClient;
+    LOwnedHere := False;
+  end
+  else
+  begin
+    LMCP := TMCPClient.Create(FMCPURL);
+    LOwnedHere := True;
+  end;
   try
     LMCP.Initialize;
 
@@ -542,7 +580,8 @@ begin
       LToolsRaw.Free;
     end;
   finally
-    LMCP.Free;
+    if LOwnedHere then
+      LMCP.Free;
   end;
 end;
 

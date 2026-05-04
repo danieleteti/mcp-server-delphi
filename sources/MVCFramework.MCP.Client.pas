@@ -68,19 +68,55 @@ uses
   System.Net.URLClient;
 
 type
-  TMCPClient = class
-  private
-    FURL: string;          // MCP server endpoint (e.g. http://127.0.0.1:8080/mcp)
-    FSessionID: string;    // Set after the first POST (Mcp-Session-Id header)
-    FRequestID: Integer;   // Monotonic counter for the JSON-RPC "id" field
-    FHTTP: THTTPClient;    // Reused for all calls
+  // Abstract MCP client base, shared across transports (HTTP, stdio, ...).
+  // Sub-classes implement the actual wire protocol. The agent and any other
+  // generic consumer should reference TMCPClientBase, not the concrete
+  // transport class, so the same code works for any spec-compliant server.
+  TMCPClientBase = class
+  protected
     FProtocolVersion: string;
     FClientName: string;
     FClientVersion: string;
+    FRequestID: Integer;     // Monotonic counter for the JSON-RPC "id" field
+    function NextID: Integer;
+  public
+    constructor Create; virtual;
+
+    // MCP handshake: "initialize" + "notifications/initialized".
+    // Must be called once before any tools/*, resources/*, prompts/* call.
+    procedure Initialize; virtual; abstract;
+
+    // Tools.
+    function ListTools: TJSONArray; virtual; abstract;
+    function CallTool(const AName: string; AArguments: TJSONObject): string; virtual; abstract;
+
+    // Resources.
+    function ListResources: TJSONArray; virtual; abstract;
+    function ListResourceTemplates: TJSONArray; virtual; abstract;
+    function ReadResource(const AURI: string; out AMimeType: string): string; virtual; abstract;
+
+    // Prompts.
+    function ListPrompts: TJSONArray; virtual; abstract;
+    function GetPrompt(const AName: string; AArguments: TJSONObject): TJSONArray; virtual; abstract;
+
+    // Protocol version sent during initialize (defaults to MCP_PROTOCOL_VERSION).
+    property ProtocolVersion: string read FProtocolVersion write FProtocolVersion;
+    // clientInfo.name sent during initialize.
+    property ClientName: string read FClientName write FClientName;
+    // clientInfo.version sent during initialize.
+    property ClientVersion: string read FClientVersion write FClientVersion;
+  end;
+
+  // HTTP / Streamable HTTP transport. The historical "TMCPClient" — kept
+  // under that name so existing callers keep working unchanged.
+  TMCPClient = class(TMCPClientBase)
+  private
+    FURL: string;          // MCP server endpoint (e.g. http://127.0.0.1:8080/mcp)
+    FSessionID: string;    // Set after the first POST (Mcp-Session-Id header)
+    FHTTP: THTTPClient;    // Reused for all calls
     FResponseTimeoutMs: Integer;
     FConnectionTimeoutMs: Integer;
 
-    function NextID: Integer;
     function BuildHeaders: TNetHeaders;
 
     // Performs a single JSON-RPC request. AParams is CONSUMED.
@@ -88,53 +124,51 @@ type
     function RPC(const AMethod: string; AParams: TJSONObject;
       ANotify: Boolean = False): TJSONObject;
   public
-    constructor Create(const AURL: string);
+    constructor Create(const AURL: string); reintroduce;
     destructor Destroy; override;
 
-    // MCP handshake: "initialize" + "notifications/initialized".
-    // Must be called once before any tools/* or resources/* or prompts/* call.
-    procedure Initialize;
+    procedure Initialize; override;
 
     // ---- Tools --------------------------------------------------------------
 
     // Returns the array of tool descriptors {name, description, inputSchema}.
     // Ownership transferred to caller.
-    function ListTools: TJSONArray;
+    function ListTools: TJSONArray; override;
 
     // Invokes a tool and returns the concatenated text of every "content"
     // block returned by the server. Non-text blocks (image, resource, ...)
     // are appended as raw JSON. AArguments is CONSUMED.
-    function CallTool(const AName: string; AArguments: TJSONObject): string;
+    function CallTool(const AName: string; AArguments: TJSONObject): string; override;
 
     // ---- Resources ----------------------------------------------------------
 
     // Returns the array of static resource descriptors {uri, name, description, mimeType}
     // exposed via resources/list. Ownership transferred to caller.
-    function ListResources: TJSONArray;
+    function ListResources: TJSONArray; override;
 
     // Returns the array of templated resource descriptors {uriTemplate, name,
     // description, mimeType} exposed via resources/templates/list (RFC 6570
     // Level 1 templates). Ownership transferred to caller.
-    function ListResourceTemplates: TJSONArray;
+    function ListResourceTemplates: TJSONArray; override;
 
     // Reads a resource by URI. The URI may be a static one or the concretized
     // form of a template (e.g. "user://42" matching "user://{id}").
     // Concatenates the "text" content of every contents block; for blob
     // contents, emits a placeholder mentioning the base64 length. Sets
     // AMimeType to the MIME type of the first contents block, when present.
-    function ReadResource(const AURI: string; out AMimeType: string): string;
+    function ReadResource(const AURI: string; out AMimeType: string): string; override;
 
     // ---- Prompts ------------------------------------------------------------
 
     // Returns the array of prompt descriptors {name, description, arguments}
     // exposed via prompts/list. Ownership transferred to caller.
-    function ListPrompts: TJSONArray;
+    function ListPrompts: TJSONArray; override;
 
     // Renders a prompt by name and returns its messages array
     // [{role, content}, ...] suitable for forwarding to an LLM.
     // AArguments is CONSUMED. Ownership of the returned array transferred
     // to caller. AArguments may be nil for argument-less prompts.
-    function GetPrompt(const AName: string; AArguments: TJSONObject): TJSONArray;
+    function GetPrompt(const AName: string; AArguments: TJSONObject): TJSONArray; override;
 
     // ---- Configuration ------------------------------------------------------
 
@@ -142,12 +176,6 @@ type
     property URL: string read FURL;
     // Mcp-Session-Id captured after the first response.
     property SessionID: string read FSessionID;
-    // Protocol version sent during initialize (defaults to MCP_PROTOCOL_VERSION).
-    property ProtocolVersion: string read FProtocolVersion write FProtocolVersion;
-    // clientInfo.name sent during initialize.
-    property ClientName: string read FClientName write FClientName;
-    // clientInfo.version sent during initialize.
-    property ClientVersion: string read FClientVersion write FClientVersion;
     // Response timeout (ms) for HTTP calls. Default 300000 (5 min) — generous
     // because tools may include long-running operations or human-in-the-loop
     // steps. Decrease for stricter SLAs.
@@ -162,7 +190,26 @@ uses
   MVCFramework.MCP.Types;
 
 // ──────────────────────────────────────────────────────────────────────────
-// Construction / destruction
+// TMCPClientBase
+// ──────────────────────────────────────────────────────────────────────────
+
+constructor TMCPClientBase.Create;
+begin
+  inherited Create;
+  FProtocolVersion := MCP_PROTOCOL_VERSION;
+  FClientName := 'MVCFramework.MCP.Client';
+  FClientVersion := '1.0';
+  FRequestID := 0;
+end;
+
+function TMCPClientBase.NextID: Integer;
+begin
+  Inc(FRequestID);
+  Result := FRequestID;
+end;
+
+// ──────────────────────────────────────────────────────────────────────────
+// TMCPClient (HTTP) - Construction / destruction
 // ──────────────────────────────────────────────────────────────────────────
 
 constructor TMCPClient.Create(const AURL: string);
@@ -170,10 +217,6 @@ begin
   inherited Create;
   FURL := AURL;
   FSessionID := '';
-  FRequestID := 0;
-  FProtocolVersion := MCP_PROTOCOL_VERSION;
-  FClientName := 'MVCFramework.MCP.Client';
-  FClientVersion := '1.0';
   FResponseTimeoutMs := 300000;
   FConnectionTimeoutMs := 10000;
 
@@ -191,12 +234,6 @@ end;
 // ──────────────────────────────────────────────────────────────────────────
 // Private helpers
 // ──────────────────────────────────────────────────────────────────────────
-
-function TMCPClient.NextID: Integer;
-begin
-  Inc(FRequestID);
-  Result := FRequestID;
-end;
 
 function TMCPClient.BuildHeaders: TNetHeaders;
 begin

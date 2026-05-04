@@ -130,7 +130,7 @@ end;
 
 procedure TMCPBridgeProvider.AddRoute(ARoute: TMCPBridgeRouteInfo);
 begin
-  FRoutes.Add(ARoute);
+  raise Exception.Create('Not implemented');
 end;
 
 function TMCPBridgeProvider.FindRoute(const AToolName: string): TMCPBridgeRouteInfo;

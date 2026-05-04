@@ -631,6 +631,9 @@ begin
     LSB.AppendLine('    constructor Create; override;');
     LSB.AppendLine('');
 
+    if Length(ARoutes) = 0 then
+      LSB.AppendLine('    // No bridge tools registered');
+
     for LRoute in ARoutes do
     begin
       if LRoute.Description.IsEmpty then
@@ -643,6 +646,8 @@ begin
       begin
         if not LFirst then LSB.Append(';');
         LSB.AppendLine('');
+        if LParam.TypeKind = tkFloat then
+          LSB.AppendLine('      // TODO: verify JSON schema type for parameter ''' + LParam.Name + '''');
         LSB.Append('      [MCPParam(''' + LParam.Description + '''');
         if not LParam.Required then LSB.Append(', False');
         LSB.Append(')] const ' + LParam.Name + ': ');
@@ -710,35 +715,50 @@ begin
         LSB.AppendLine('  LBodyStream: TStringStream;');
 
       LSB.AppendLine('begin');
-      LSB.AppendLine('  LClient := TNetHTTPClient.Create(nil);');
       if LHasBody then
-        LSB.AppendLine('  LBodyStream := TStringStream.Create(' +
-          LBodyParamName + ', TEncoding.UTF8);');
+        LSB.AppendLine('  LBodyStream := nil;');
+      LSB.AppendLine('  LClient := TNetHTTPClient.Create(nil);');
 
-      // Build URL — substitute ($name) path params inline
       LURLExpr := 'FBaseURL + ''' + LRoute.PathTemplate + '''';
       for LParam in LRoute.Params do
         if LParam.Kind = bpkPath then
         begin
-          // Replace ($paramName) in the template expression
           LURLExpr := StringReplace(LURLExpr,
             '($' + LParam.Name + ')',
             '''+' + LParam.Name + '.ToString+''',
             [rfReplaceAll, rfIgnoreCase]);
+          // Also handle typed form ($name:type)
+          var LTypedPat := LowerCase('($' + LParam.Name + ':');
+          var LURLLower := LowerCase(LURLExpr);
+          var LTypedStart := Pos(LTypedPat, LURLLower);
+          if LTypedStart > 0 then
+          begin
+            var LClosePos := Pos(')', LURLExpr, LTypedStart);
+            if LClosePos > 0 then
+              LURLExpr := Copy(LURLExpr, 1, LTypedStart - 1) +
+                '''+' + LParam.Name + '.ToString+''' +
+                Copy(LURLExpr, LClosePos + 1, MaxInt);
+          end;
         end;
-      // Append query params
       LQuerySep := '?';
       for LParam in LRoute.Params do
         if LParam.Kind = bpkQuery then
         begin
-          LURLExpr := LURLExpr + '+''' + LQuerySep + LParam.Name + '=''+' +
-            LParam.Name + '.ToString';
+          if LParam.TypeKind = tkEnumeration then
+            LURLExpr := LURLExpr + '+''' + LQuerySep + LParam.Name + '=''+' +
+              LParam.Name + '.ToString.ToLower'
+          else
+            LURLExpr := LURLExpr + '+''' + LQuerySep + LParam.Name + '=''+' +
+              LParam.Name + '.ToString';
           LQuerySep := '&';
         end;
 
       LSB.AppendLine('  LURL := ' + LURLExpr + ';');
 
       LSB.AppendLine('  try');
+      if LHasBody then
+        LSB.AppendLine('    LBodyStream := TStringStream.Create(' +
+          LBodyParamName + ', TEncoding.UTF8);');
       if LHasBody then
       begin
         if SameText(LRoute.HTTPMethod, 'PUT') then
@@ -844,10 +864,15 @@ begin
   end;
 
   LProvider := TMCPBridgeProvider.Create(ABaseURL);
-  for LRoute in LRoutes do
-    LProvider.AddRoute(LRoute);
-  // TMCPServer takes ownership of LProvider (and transitively of the routes inside it)
-  Self.RegisterDynamicProvider(LProvider);
+  try
+    for LRoute in LRoutes do
+      LProvider.AddRoute(LRoute);
+    // TMCPServer takes ownership of LProvider (and transitively of the routes inside it)
+    Self.RegisterDynamicProvider(LProvider);
+  except
+    LProvider.Free;
+    raise;
+  end;
 
   if not Self.ServerName.Contains('[bootstrap proxy') then
     Self.ServerName := Self.ServerName + ' [bootstrap proxy — not for production]';

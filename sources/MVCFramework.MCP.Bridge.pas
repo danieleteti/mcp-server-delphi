@@ -106,7 +106,7 @@ type
 implementation
 
 uses
-  System.IOUtils, System.Rtti;
+  System.IOUtils, System.Rtti, System.NetEncoding;
 
 { TMCPBridgeRouteInfo }
 
@@ -384,6 +384,8 @@ begin
   FBaseURL := ABaseURL;
   FRoutes := TObjectList<TMCPBridgeRouteInfo>.Create(True);
   FHttpClient := TNetHTTPClient.Create(nil);
+  FHttpClient.ContentType := 'application/json';
+  FHttpClient.Accept := 'application/json';
 end;
 
 destructor TMCPBridgeProvider.Destroy;
@@ -395,32 +397,168 @@ end;
 
 procedure TMCPBridgeProvider.AddRoute(ARoute: TMCPBridgeRouteInfo);
 begin
-  raise Exception.Create('Not implemented');
+  FRoutes.Add(ARoute);
 end;
 
 function TMCPBridgeProvider.FindRoute(const AToolName: string): TMCPBridgeRouteInfo;
+var
+  LRoute: TMCPBridgeRouteInfo;
 begin
-  raise Exception.Create('Not implemented');
+  for LRoute in FRoutes do
+    if SameText(LRoute.ToolName, AToolName) then
+      Exit(LRoute);
+  Result := nil;
 end;
 
 function TMCPBridgeProvider.BuildURL(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
+var
+  LPath: string;
+  LParam: TMCPBridgeParamInfo;
+  LValue: string;
+  LTypedPat: string;
+  LStart, LEnd: Integer;
 begin
-  raise Exception.Create('Not implemented');
+  LPath := ARoute.PathTemplate;
+  for LParam in ARoute.Params do
+  begin
+    if LParam.Kind = bpkPath then
+    begin
+      LValue := '';
+      if (AArguments <> nil) and AArguments.Contains(LParam.Name) then
+        LValue := AArguments.S[LParam.Name];
+      // DMVCFramework path params use ($name) format
+      LPath := StringReplace(LPath, '($' + LParam.Name + ')', TNetEncoding.URL.Encode(LValue), [rfIgnoreCase]);
+      // Handle typed form ($name:anytype)
+      LTypedPat := '($' + LParam.Name + ':';
+      LStart := Pos(LTypedPat, LPath);
+      if LStart > 0 then
+      begin
+        LEnd := Pos(')', LPath, LStart);
+        if LEnd > LStart then
+          LPath := Copy(LPath, 1, LStart - 1) +
+                   TNetEncoding.URL.Encode(LValue) +
+                   Copy(LPath, LEnd + 1, MaxInt);
+      end;
+    end;
+  end;
+  Result := FBaseURL + LPath;
 end;
 
 function TMCPBridgeProvider.BuildQueryString(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
+var
+  LParam: TMCPBridgeParamInfo;
+  LSB: TStringBuilder;
+  LValue: string;
 begin
-  raise Exception.Create('Not implemented');
+  LSB := TStringBuilder.Create;
+  try
+    for LParam in ARoute.Params do
+    begin
+      if LParam.Kind <> bpkQuery then Continue;
+      if (AArguments = nil) or not AArguments.Contains(LParam.Name) then Continue;
+      LValue := AArguments.S[LParam.Name];
+      if LSB.Length = 0 then LSB.Append('?') else LSB.Append('&');
+      LSB.Append(TNetEncoding.URL.Encode(LParam.Name));
+      LSB.Append('=');
+      LSB.Append(TNetEncoding.URL.Encode(LValue));
+    end;
+    Result := LSB.ToString;
+  finally
+    LSB.Free;
+  end;
 end;
 
 function TMCPBridgeProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
+var
+  LRoute: TMCPBridgeRouteInfo;
+  LDef: TMCPDynamicToolDef;
+  LDefs: TArray<TMCPDynamicToolDef>;
+  I, J: Integer;
 begin
-  raise Exception.Create('Not implemented');
+  SetLength(LDefs, FRoutes.Count);
+  for I := 0 to FRoutes.Count - 1 do
+  begin
+    LRoute := FRoutes[I];
+    LDef.Name                := LRoute.ToolName;
+    LDef.Description         := LRoute.Description;
+    LDef.ControllerClassName := LRoute.ControllerClassName;
+    SetLength(LDef.Params, Length(LRoute.Params));
+    for J := 0 to High(LRoute.Params) do
+    begin
+      LDef.Params[J].Name           := LRoute.Params[J].Name;
+      LDef.Params[J].Description    := LRoute.Params[J].Description;
+      LDef.Params[J].Required       := LRoute.Params[J].Required;
+      LDef.Params[J].TypeKind       := LRoute.Params[J].TypeKind;
+      LDef.Params[J].JsonSchemaType := LRoute.Params[J].JsonSchemaType;
+    end;
+    LDefs[I] := LDef;
+  end;
+  Result := LDefs;
 end;
 
 function TMCPBridgeProvider.InvokeDynamic(const AToolName: string; AArguments: TJDOJsonObject): TMCPToolResult;
+var
+  LRoute: TMCPBridgeRouteInfo;
+  LURL: string;
+  LResp: IHTTPResponse;
+  LParam: TMCPBridgeParamInfo;
+  LBodyStream: TStringStream;
+  LHasBody: Boolean;
+  LBodyContent: string;
 begin
-  raise Exception.Create('Not implemented');
+  LRoute := FindRoute(AToolName);
+  if LRoute = nil then
+    Exit(TMCPToolResult.Error('Bridge: unknown tool "' + AToolName + '"'));
+
+  LURL := BuildURL(LRoute, AArguments) + BuildQueryString(LRoute, AArguments);
+
+  LHasBody := False;
+  LBodyContent := '';
+  for LParam in LRoute.Params do
+    if LParam.Kind = bpkBody then
+    begin
+      LHasBody := True;
+      if (AArguments <> nil) and AArguments.Contains(LParam.Name) then
+        LBodyContent := AArguments.S[LParam.Name];
+      Break;
+    end;
+
+  try
+    if LHasBody then
+    begin
+      LBodyStream := TStringStream.Create(LBodyContent, TEncoding.UTF8);
+      try
+        if SameText(LRoute.HTTPMethod, 'POST') then
+          LResp := FHttpClient.Post(LURL, LBodyStream)
+        else if SameText(LRoute.HTTPMethod, 'PUT') then
+          LResp := FHttpClient.Put(LURL, LBodyStream)
+        else if SameText(LRoute.HTTPMethod, 'PATCH') then
+          LResp := FHttpClient.Patch(LURL, LBodyStream)
+        else
+          LResp := FHttpClient.Post(LURL, LBodyStream);
+      finally
+        LBodyStream.Free;
+      end;
+    end
+    else
+    begin
+      if SameText(LRoute.HTTPMethod, 'GET') then
+        LResp := FHttpClient.Get(LURL)
+      else if SameText(LRoute.HTTPMethod, 'DELETE') then
+        LResp := FHttpClient.Delete(LURL)
+      else
+        LResp := FHttpClient.Get(LURL);
+    end;
+
+    if LResp.StatusCode < 400 then
+      Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))
+    else
+      Result := TMCPToolResult.Error(
+        'HTTP ' + LResp.StatusCode.ToString + ': ' + LResp.ContentAsString(TEncoding.UTF8));
+  except
+    on E: Exception do
+      Result := TMCPToolResult.Error('Network error: ' + E.Message);
+  end;
 end;
 
 { TMCPBridgeCodeGen }

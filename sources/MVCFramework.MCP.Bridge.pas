@@ -324,9 +324,11 @@ begin
               LFromBody := MVCFromBodyAttribute(LParamAttr);
           end;
 
-          // Detect path parameter: parameter name matches ($name) segment in path
-          LParamSegment := '($' + LParam.Name + ')';
-          LIsPathParam := Pos(LParamSegment, LFullPath) > 0;
+          // Detect path parameter: ($name) or ($name:type) form
+          LParamSegment := '($' + LParam.Name;
+          LIsPathParam := Pos(LParamSegment + ')', LFullPath) > 0;
+          if not LIsPathParam then
+            LIsPathParam := Pos(LParamSegment + ':', LFullPath) > 0;
 
           if (not LIsPathParam) and (LFromQuery = nil) and (LFromBody = nil) then
             Continue;  // no binding → skip

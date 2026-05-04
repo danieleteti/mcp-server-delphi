@@ -478,7 +478,7 @@ end;
 function TMCPToolProvider.InvokeDynamic(const AToolName: string;
   AArguments: TJDOJsonObject): TMCPToolResult;
 begin
-  raise Exception.Create('InvokeDynamic not implemented');
+  raise Exception.CreateFmt('%s.InvokeDynamic not implemented', [ClassName]);
 end;
 
 end.

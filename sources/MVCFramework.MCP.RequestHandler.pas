@@ -335,6 +335,14 @@ begin
         'Missing required parameter: %s', [LToolInfo.Params[I].Name]);
   end;
 
+  { Dynamic dispatch (bridge/proxy tools) }
+  if LToolInfo.HandlerInstance <> nil then
+  begin
+    LToolResult := LToolInfo.HandlerInstance.InvokeDynamic(LToolInfo.Name, LArguments);
+    Result := LToolResult.ToJSON;
+    Exit;
+  end;
+
   { Build TValue array }
   SetLength(LArgs, Length(LToolInfo.Params));
   for I := 0 to High(LToolInfo.Params) do

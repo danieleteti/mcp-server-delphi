@@ -27,7 +27,7 @@ unit MVCFramework.MCP.RequestHandler;
 interface
 
 uses
-  System.SysUtils, System.Rtti,
+  System.SysUtils, System.Rtti, System.RegularExpressions,
   JsonDataObjects;
 
 type
@@ -394,11 +394,16 @@ var
   LInfo: TMCPResourceInfo;
   LResObj: TJDOJsonObject;
 begin
+  // MCP spec 2025-03-26: resources/list returns only concrete (static) resources.
+  // Templated resources go to resources/templates/list. Mixing them here would
+  // confuse clients that try to resources/read the literal {placeholder} URI.
   LServer := TMCPServer(FServer);
   Result := TJDOJsonObject.Create;
   LResArray := Result.A['resources'];
   for LInfo in LServer.Resources.Values do
   begin
+    if LInfo.IsTemplate then
+      Continue;
     LResObj := LResArray.AddObject;
     LResObj.S['uri'] := LInfo.URI;
     LResObj.S['name'] := LInfo.Name;
@@ -408,13 +413,62 @@ begin
 end;
 
 function TMCPRequestHandler.DoResourcesTemplatesList: TJDOJsonObject;
+var
+  LServer: TMCPServer;
+  LResArray: TJDOJsonArray;
+  LInfo: TMCPResourceInfo;
+  LResObj: TJDOJsonObject;
 begin
-  { MCP spec 2025-03-26: the server MUST respond to resources/templates/list
-    when the resources capability is advertised. The library does not
-    currently expose templated (URI-pattern) resources, so the list is
-    always empty - which is spec-compliant. }
+  { MCP spec 2025-03-26: resources/templates/list returns ResourceTemplate
+    objects (uriTemplate, name, description, mimeType). The client expands
+    the template locally and calls resources/read with the concretized URI;
+    matching back to the template happens server-side in DoResourcesRead. }
+  LServer := TMCPServer(FServer);
   Result := TJDOJsonObject.Create;
-  Result.A['resourceTemplates'];
+  LResArray := Result.A['resourceTemplates'];
+  for LInfo in LServer.Resources.Values do
+  begin
+    if not LInfo.IsTemplate then
+      Continue;
+    LResObj := LResArray.AddObject;
+    LResObj.S['uriTemplate'] := LInfo.URI;
+    LResObj.S['name'] := LInfo.Name;
+    LResObj.S['description'] := LInfo.Description;
+    LResObj.S['mimeType'] := LInfo.MimeType;
+  end;
+end;
+
+{ Tries to match a concrete URI against any registered template.
+  Returns the matching resource info and the captured variable values
+  (in template declaration order), or nil/empty when nothing matches.
+  The first successful match wins; templates are unordered, so two
+  templates that could both match the same URI are a developer error
+  caught at scan time only if they have the same exact URI string. }
+function FindMatchingTemplate(AServer: TMCPServer; const AURI: string;
+  out AInfo: TMCPResourceInfo; out AValues: TArray<string>): Boolean;
+var
+  LCandidate: TMCPResourceInfo;
+  LMatch: TMatch;
+  I: Integer;
+begin
+  AInfo := nil;
+  AValues := nil;
+  for LCandidate in AServer.Resources.Values do
+  begin
+    if not LCandidate.IsTemplate then
+      Continue;
+    LMatch := LCandidate.Pattern.Match(AURI);
+    if LMatch.Success then
+    begin
+      AInfo := LCandidate;
+      SetLength(AValues, Length(LCandidate.VariableNames));
+      { Group[0] is the full match, Group[1..N] are the captures }
+      for I := 0 to High(LCandidate.VariableNames) do
+        AValues[I] := LMatch.Groups[I + 1].Value;
+      Exit(True);
+    end;
+  end;
+  Result := False;
 end;
 
 function TMCPRequestHandler.DoResourcesRead(AParams: TJDOJsonObject): TJDOJsonObject;
@@ -424,6 +478,9 @@ var
   LProvider: TMCPResourceProvider;
   LResResult: TMCPResourceResult;
   LURI: string;
+  LValues: TArray<string>;
+  LArgs: TArray<TValue>;
+  I: Integer;
 begin
   LServer := TMCPServer(FServer);
 
@@ -434,13 +491,46 @@ begin
   if LURI.IsEmpty then
     raise Exception.Create('Missing resource URI');
 
+  { Two-step lookup:
+    1) Exact match on the static resource registry (fast path, O(1)).
+    2) Template matching by linear scan over registered templates.
+    Static resources keep their pre-templates dispatch performance; templates
+    pay an O(N templates) regex scan only when the URI is not literally
+    registered. The cost is dominated by the regex match itself, which is
+    cheap for the simple [^/]+ patterns we generate. }
   if not LServer.Resources.TryGetValue(LowerCase(LURI), LInfo) then
-    raise Exception.Create('Resource not found: ' + LURI);
+  begin
+    if not FindMatchingTemplate(LServer, LURI, LInfo, LValues) then
+      raise Exception.Create('Resource not found: ' + LURI);
+  end
+  else if LInfo.IsTemplate then
+    // A literal hit on a template URI is meaningless: a URI like
+    // "scheme://x/{id}" is not a real resource, only a description of a
+    // family of resources. Reject explicitly so that a misconfigured client
+    // doesn't see an "unbound variable in URI" error from the user method.
+    raise Exception.Create(
+      'URI "' + LURI + '" is a template, not a concrete resource. ' +
+      'Expand the {variables} and call resources/read with a real URI.');
 
   LProvider := LInfo.ProviderClass.Create;
   try
-    LResResult := LInfo.RttiMethod.Invoke(LProvider,
-      [TValue.From<string>(LURI)]).AsType<TMCPResourceResult>;
+    if LInfo.IsTemplate then
+    begin
+      // Method signature: (URI, var1, var2, ...) all strings. Build the
+      // argument array in declaration order — ValidateResourceSignature
+      // already ensured arity and parameter names match at scan time.
+      SetLength(LArgs, 1 + Length(LValues));
+      LArgs[0] := TValue.From<string>(LURI);
+      for I := 0 to High(LValues) do
+        LArgs[I + 1] := TValue.From<string>(LValues[I]);
+    end
+    else
+    begin
+      SetLength(LArgs, 1);
+      LArgs[0] := TValue.From<string>(LURI);
+    end;
+    LResResult := LInfo.RttiMethod.Invoke(LProvider, LArgs)
+      .AsType<TMCPResourceResult>;
     Result := LResResult.ToJSON;
   finally
     LProvider.Free;

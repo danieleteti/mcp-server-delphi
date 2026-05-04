@@ -38,6 +38,14 @@ type
     [MCPResource('file:///assets/icon.png', 'Application Icon',
       'Returns a 1x1 placeholder PNG image', 'image/png')]
     function GetIcon(const URI: string): TMCPResourceResult;
+
+    // Templated resource (RFC 6570 Level 1). The URI carries a {greeting}
+    // placeholder that the client (or model) substitutes before calling
+    // resources/read. The matching value is bound to the "greeting" parameter
+    // below by name.
+    [MCPResource('greeting://{greeting}', 'Greeting',
+      'Returns a personalised greeting message', 'text/plain')]
+    function GetGreeting(const URI, greeting: string): TMCPResourceResult;
   end;
 
 implementation
@@ -77,6 +85,14 @@ begin
     URI,
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==',
     'image/png');
+end;
+
+function TMyResources.GetGreeting(const URI, greeting: string): TMCPResourceResult;
+begin
+  Result := TMCPResourceResult.Text(
+    URI,
+    Format('Hello, %s! Welcome to the MCP sample server.', [greeting]),
+    'text/plain');
 end;
 
 initialization

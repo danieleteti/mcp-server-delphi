@@ -850,6 +850,33 @@ def test_resources(client: MCPStdioClient, result: TestResult) -> None:
         tmpl = body["result"].get("resourceTemplates")
         if isinstance(tmpl, list):
             result.ok(f"resources/templates/list: returned array (length {len(tmpl)})")
+            # Each ResourceTemplate must have at minimum uriTemplate + name
+            for t in tmpl:
+                tname = t.get("name", "<unnamed>")
+                if "uriTemplate" not in t:
+                    result.fail(f"template structure: {tname}", "Missing uriTemplate")
+                elif "{" not in t["uriTemplate"]:
+                    result.fail(f"template structure: {tname}",
+                                f"uriTemplate has no placeholder: {t['uriTemplate']}")
+                else:
+                    result.ok(f"template structure: {tname} OK ({t['uriTemplate']})")
+
+            # Smoke-test: read one concretized templated URI if any template
+            # is registered. Use the user://{id} convention from the test
+            # project; if a different template is registered we just report
+            # what we attempted and let the suite stay informative.
+            if tmpl:
+                test_uri = "user://42"
+                tbody = assert_jsonrpc(
+                    result, f"resources/read: {test_uri} (templated)",
+                    client.rpc_request("resources/read", {"uri": test_uri}))
+                if tbody:
+                    contents = tbody["result"].get("contents", [])
+                    if contents and contents[0].get("uri") == test_uri:
+                        result.ok(f"templated read: URI echoed back as {test_uri}")
+                    elif contents:
+                        result.fail("templated read: URI",
+                                    f"Expected '{test_uri}', got '{contents[0].get('uri')}'")
         else:
             result.fail("resources/templates/list",
                         f"Expected 'resourceTemplates' array, got {type(tmpl).__name__}")

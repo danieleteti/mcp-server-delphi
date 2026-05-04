@@ -28,7 +28,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Rtti, System.TypInfo,
-  System.Generics.Collections,
+  System.Generics.Collections, System.RegularExpressions,
   JsonDataObjects,
   MVCFramework, MVCFramework.Commons, MVCFramework.JSONRPC,
   MVCFramework.MCP.Types, MVCFramework.MCP.Attributes,
@@ -57,15 +57,34 @@ type
     destructor Destroy; override;
   end;
 
-  { Cached resource descriptor }
+  (* Cached resource descriptor.
+     A resource is either:
+     - STATIC: URI is a fixed string, IsTemplate=False. Listed in resources/list.
+       Method signature: function(const URI: string): TMCPResourceResult;
+     - TEMPLATED: URI contains {var} placeholders per RFC 6570 (Level 1),
+       IsTemplate=True. Listed in resources/templates/list. Concrete URIs from
+       the client are matched at request time via the cached regex Pattern,
+       and the captured variable values are passed positionally to the method.
+       Method signature: function(const URI, var1, var2, ...: string): TMCPResourceResult;
+       Variable order in the signature must match the order of {var} occurrences
+       in the template URI; names must match (case-insensitive). *)
   TMCPResourceInfo = class
   public
-    URI: string;
+    URI: string;            // Original URI string from the attribute (with {var} for templates)
     Name: string;
     Description: string;
     MimeType: string;
     ProviderClass: TMCPResourceProviderClass;
     RttiMethod: TRttiMethod;
+
+    IsTemplate: Boolean;
+    // Compiled regex for templates. Matches a concrete URI and captures one
+    // group per template variable, in declaration order. Unused when not a template.
+    Pattern: TRegEx;
+    // Variable names extracted from {var} placeholders, in declaration order.
+    // Used both for resources/templates/list output and for sanity-checking the
+    // method signature at scan time. Empty for static resources.
+    VariableNames: TArray<string>;
   end;
 
   { Cached prompt argument descriptor }
@@ -405,6 +424,145 @@ begin
   end;
 end;
 
+(* Parses an MCP resource URI for RFC 6570 Level 1 placeholders ({var}).
+
+   Returns True if the URI contains at least one {var} placeholder (it is then
+   a template). Outputs the list of variable names in declaration order and a
+   compiled anchored regex with one capture group per variable.
+
+   The regex semantics for Level 1: each {var} matches one or more characters
+   excluding '/' (path separator). This is the standard interpretation used by
+   reference MCP implementations and is sufficient for path-segment templates
+   like 'erp://customers/{id}' or 'weather://forecast/{city}/{date}'.
+
+   Returns False when the URI has no placeholders — the URI is treated as a
+   static resource and the regex is not used. *)
+function ParseURITemplate(const ATemplate: string;
+  out AVarNames: TArray<string>; out APattern: TRegEx): Boolean;
+var
+  LSB: TStringBuilder;
+  I, LStart: Integer;
+  LVarName: string;
+  LLiteral: string;
+  LVarList: TList<string>;
+begin
+  AVarNames := nil;
+  Result := False;
+
+  if Pos('{', ATemplate) = 0 then
+    Exit;
+
+  LVarList := TList<string>.Create;
+  LSB := TStringBuilder.Create;
+  try
+    LSB.Append('^');
+    I := 1;
+    LStart := 1;
+    while I <= Length(ATemplate) do
+    begin
+      if ATemplate[I] = '{' then
+      begin
+        // Flush literal segment, escaped for regex
+        if I > LStart then
+        begin
+          LLiteral := Copy(ATemplate, LStart, I - LStart);
+          LSB.Append(TRegEx.Escape(LLiteral));
+        end;
+
+        // Read until matching '}' — we accept simple Level 1 names only.
+        // Reject empty placeholders and operator forms like {+var}, {#var}, {?var}:
+        // these are higher RFC 6570 levels not supported by this implementation.
+        Inc(I);
+        LStart := I;
+        while (I <= Length(ATemplate)) and (ATemplate[I] <> '}') do
+          Inc(I);
+        if I > Length(ATemplate) then
+          raise Exception.CreateFmt(
+            'Invalid URI template "%s": unmatched "{" at position %d',
+            [ATemplate, LStart - 1]);
+
+        LVarName := Copy(ATemplate, LStart, I - LStart);
+        if LVarName = '' then
+          raise Exception.CreateFmt(
+            'Invalid URI template "%s": empty placeholder "{}" at position %d',
+            [ATemplate, LStart - 1]);
+        if CharInSet(LVarName[1], ['+', '#', '.', '/', ';', '?', '&']) then
+          raise Exception.CreateFmt(
+            'Invalid URI template "%s": operator "%s" is RFC 6570 Level 2+ ' +
+            'and not supported. Use plain {name} (Level 1).',
+            [ATemplate, LVarName[1]]);
+
+        LVarList.Add(LVarName);
+        LSB.Append('([^/]+)');
+
+        Inc(I);          // skip closing brace
+        LStart := I;
+      end
+      else
+        Inc(I);
+    end;
+
+    // Trailing literal
+    if LStart <= Length(ATemplate) then
+      LSB.Append(TRegEx.Escape(Copy(ATemplate, LStart, MaxInt)));
+    LSB.Append('$');
+
+    AVarNames := LVarList.ToArray;
+    APattern := TRegEx.Create(LSB.ToString);
+    Result := True;
+  finally
+    LSB.Free;
+    LVarList.Free;
+  end;
+end;
+
+{ Validates that a resource method's signature is compatible with the
+  registered URI (template or static). Static resources expect exactly one
+  string parameter (the URI). Templated resources expect one URI parameter
+  plus one string parameter per template variable; parameter names must
+  match the variable names case-insensitively, in template-declaration order. }
+procedure ValidateResourceSignature(const AInfo: TMCPResourceInfo);
+var
+  LRttiParams: TArray<TRttiParameter>;
+  I: Integer;
+  LExpected: Integer;
+begin
+  LRttiParams := AInfo.RttiMethod.GetParameters;
+
+  if not AInfo.IsTemplate then
+  begin
+    if Length(LRttiParams) <> 1 then
+      raise Exception.CreateFmt(
+        'Resource "%s" (URI "%s") must have exactly one parameter (the URI), got %d. ' +
+        'Use a templated URI like "scheme://path/{var}" if you need variables.',
+        [AInfo.Name, AInfo.URI, Length(LRttiParams)]);
+    Exit;
+  end;
+
+  LExpected := 1 + Length(AInfo.VariableNames);
+  if Length(LRttiParams) <> LExpected then
+    raise Exception.CreateFmt(
+      'Resource "%s" (URI template "%s") declares %d variable(s) but method ' +
+      'has %d parameter(s). Expected %d (URI + one per variable).',
+      [AInfo.Name, AInfo.URI, Length(AInfo.VariableNames),
+       Length(LRttiParams), LExpected]);
+
+  // First parameter is the URI itself (any string-typed name) — no name check.
+  // Subsequent parameters must match the template variable names by name
+  // (case-insensitive), preserving order. This way the method signature is
+  // self-documenting: parameter "city" binds to placeholder "city" in the template.
+  for I := 0 to High(AInfo.VariableNames) do
+  begin
+    if not SameText(LRttiParams[I + 1].Name, AInfo.VariableNames[I]) then
+      raise Exception.CreateFmt(
+        'Resource "%s": method parameter #%d is named "%s" but the template ' +
+        'expects "%s" at this position. Rename the parameter to match the ' +
+        '{%s} placeholder (case-insensitive).',
+        [AInfo.Name, I + 2, LRttiParams[I + 1].Name,
+         AInfo.VariableNames[I], AInfo.VariableNames[I]]);
+  end;
+end;
+
 procedure TMCPServer.ScanResourceProvider(AProviderClass: TMCPResourceProviderClass);
 var
   LRttiType: TRttiType;
@@ -434,6 +592,11 @@ begin
           LInfo.ProviderClass := AProviderClass;
           LInfo.RttiMethod := LMethod;
 
+          LInfo.IsTemplate := ParseURITemplate(LInfo.URI,
+            LInfo.VariableNames, LInfo.Pattern);
+
+          ValidateResourceSignature(LInfo);
+
           LKey := LowerCase(LInfo.URI);
           if FResources.ContainsKey(LKey) then
             raise Exception.CreateFmt('Duplicate resource URI: "%s"', [LInfo.URI]);
@@ -442,7 +605,13 @@ begin
           LInfo.Free;
           raise;
         end;
-        LogI('MCP: Registered resource "' + LResAttr.Name + '" (' + LResAttr.URI + ')');
+        if LInfo.IsTemplate then
+          LogI('MCP: Registered resource template "' + LResAttr.Name +
+            '" (' + LResAttr.URI + ') with ' +
+            IntToStr(Length(LInfo.VariableNames)) + ' variable(s)')
+        else
+          LogI('MCP: Registered resource "' + LResAttr.Name +
+            '" (' + LResAttr.URI + ')');
       end;
     end;
   end;

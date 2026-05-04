@@ -725,6 +725,15 @@ def test_resources(client: MCPTestClient, result: TestResult):
     else:
         result.fail("resources/list: count", f"Expected 3+, got {len(resources)}")
 
+    # MCP spec: templated resources go in resources/templates/list, NOT
+    # resources/list. Verify no template URIs leak into the static listing.
+    template_uris_leaked = [r.get("uri", "") for r in resources if "{" in r.get("uri", "")]
+    if not template_uris_leaked:
+        result.ok("resources/list: no templated URIs leaked from templates list")
+    else:
+        result.fail("resources/list: template leak",
+                    f"Templated URIs found in resources/list: {template_uris_leaked}")
+
     # Validate structure
     for res in resources:
         name = res.get("name", "<unnamed>")
@@ -788,6 +797,117 @@ def test_resources(client: MCPTestClient, result: TestResult):
     body = assert_jsonrpc(result, "resources/read: unknown URI", resp, expect_error=True)
     if body:
         result.ok("resources/read: unknown URI returns error")
+
+
+# --- Resource templates (RFC 6570 Level 1) ---
+
+def test_resource_templates(client: MCPTestClient, result: TestResult):
+    """Test resources/templates/list and resources/read with templated URIs.
+
+    The test project registers two templates:
+      - user://{id}                       (single variable)
+      - weather://forecast/{city}/{date}  (two variables)
+
+    Spec compliance checks:
+      - resources/templates/list returns ResourceTemplate objects with
+        uriTemplate, name (description, mimeType optional but present here)
+      - resources/read with a concrete URI matching a template returns the
+        same uri in contents[0].uri
+      - reading a literal template URI (with {var} unexpanded) is rejected
+    """
+    print("\n--- Resource Templates ---")
+
+    resp = client.rpc_request("resources/templates/list")
+    body = assert_jsonrpc(result, "resources/templates/list: success", resp)
+    if not body:
+        return
+
+    templates = body["result"].get("resourceTemplates", [])
+    if not isinstance(templates, list):
+        result.fail("resources/templates/list: shape", "Expected 'resourceTemplates' array")
+        return
+
+    result.ok(f"resources/templates/list: returned {len(templates)} template(s)")
+
+    if len(templates) >= 2:
+        result.ok(f"resources/templates/list: expected 2+, got {len(templates)}")
+    else:
+        result.fail("resources/templates/list: count",
+                    f"Expected 2+ templates, got {len(templates)}")
+
+    # Validate ResourceTemplate structure (uriTemplate, name required)
+    for tpl in templates:
+        name = tpl.get("name", "<unnamed>")
+        if "uriTemplate" not in tpl:
+            result.fail(f"template structure: {name}", "Missing 'uriTemplate'")
+        elif "name" not in tpl:
+            result.fail(f"template structure: {name}", "Missing 'name'")
+        elif "{" not in tpl["uriTemplate"]:
+            result.fail(f"template structure: {name}",
+                        f"uriTemplate has no placeholder: {tpl['uriTemplate']}")
+        else:
+            result.ok(f"template structure: {name} OK ({tpl['uriTemplate']})")
+
+    # Read user://42 — single-variable template, JSON content
+    resp = client.rpc_request("resources/read", {"uri": "user://42"})
+    body = assert_jsonrpc(result, "resources/read: user://42", resp)
+    if body:
+        contents = body["result"].get("contents", [])
+        if len(contents) > 0:
+            item = contents[0]
+            if item.get("uri") == "user://42":
+                result.ok("templated read: URI echoed back unchanged")
+            else:
+                result.fail("templated read: URI",
+                            f"Expected 'user://42', got '{item.get('uri')}'")
+            try:
+                obj = json.loads(item.get("text", ""))
+                if obj.get("id") == "42":
+                    result.ok("templated read: variable bound (id=42)")
+                else:
+                    result.fail("templated read: variable",
+                                f"Expected id='42' in body, got {obj}")
+            except (json.JSONDecodeError, TypeError):
+                result.fail("templated read: body",
+                            f"Not valid JSON: '{item.get('text', '')[:80]}'")
+        else:
+            result.fail("resources/read: user://42", "Empty contents")
+
+    # Read weather://forecast/Rome/2026-05-08 — multi-variable template
+    resp = client.rpc_request("resources/read",
+                              {"uri": "weather://forecast/Rome/2026-05-08"})
+    body = assert_jsonrpc(result, "resources/read: weather forecast", resp)
+    if body:
+        contents = body["result"].get("contents", [])
+        if len(contents) > 0:
+            try:
+                obj = json.loads(contents[0].get("text", ""))
+                if obj.get("city") == "Rome" and obj.get("date") == "2026-05-08":
+                    result.ok("multi-variable template: city and date bound correctly")
+                else:
+                    result.fail("multi-variable template",
+                                f"Expected city=Rome, date=2026-05-08, got {obj}")
+            except (json.JSONDecodeError, TypeError):
+                result.fail("multi-variable template",
+                            f"Not valid JSON: '{contents[0].get('text', '')[:80]}'")
+        else:
+            result.fail("resources/read: weather forecast", "Empty contents")
+
+    # Reading a URI that does not match any template MUST error (not match
+    # the template by accident). Different number of segments.
+    resp = client.rpc_request("resources/read",
+                              {"uri": "weather://forecast/Rome"})
+    body = assert_jsonrpc(result, "resources/read: incomplete template",
+                          resp, expect_error=True)
+    if body:
+        result.ok("incomplete template URI: returns error")
+
+    # Reading the literal template URI (with unexpanded {var}) MUST be rejected
+    resp = client.rpc_request("resources/read", {"uri": "user://{id}"})
+    body = assert_jsonrpc(result, "resources/read: literal template URI",
+                          resp, expect_error=True)
+    if body:
+        result.ok("literal template URI: returns error (must expand variables)")
 
 
 # --- Prompts ---
@@ -1285,6 +1405,7 @@ def main():
 
     # Resources
     test_resources(client, result)
+    test_resource_templates(client, result)
 
     # Prompts
     test_prompts(client, result)

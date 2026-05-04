@@ -33,6 +33,8 @@ uses
 type
   TTestResources = class(TMCPResourceProvider)
   public
+    { --- Static resources --- }
+
     [MCPResource('config://app/settings', 'Application Settings',
       'Returns the current application configuration as JSON', 'application/json')]
     function GetAppSettings(const URI: string): TMCPResourceResult;
@@ -44,11 +46,26 @@ type
     [MCPResource('file:///assets/logo.png', 'Logo Image',
       'Returns a small test logo as base64 blob', 'image/png')]
     function GetLogo(const URI: string): TMCPResourceResult;
+
+    // --- Templated resources (RFC 6570 Level 1) ---
+
+    // Single-variable template. Method parameter "id" matches the {id} placeholder.
+    [MCPResource('user://{id}', 'User Profile',
+      'Returns a fake user profile by ID as JSON', 'application/json')]
+    function GetUser(const URI, id: string): TMCPResourceResult;
+
+    // Multi-variable template. Parameter order and names match the
+    // placeholders left-to-right.
+    [MCPResource('weather://forecast/{city}/{date}', 'Weather Forecast',
+      'Returns a fake weather forecast for the given city and date',
+      'application/json')]
+    function GetForecast(const URI, city, date: string): TMCPResourceResult;
   end;
 
 implementation
 
 uses
+  System.SysUtils,
   MVCFramework.MCP.Server;
 
 { TTestResources }
@@ -73,6 +90,22 @@ begin
   Result := TMCPResourceResult.Blob(URI,
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==',
     'image/png');
+end;
+
+function TTestResources.GetUser(const URI, id: string): TMCPResourceResult;
+begin
+  Result := TMCPResourceResult.Text(URI,
+    Format('{"id":"%s","name":"User %s","email":"user%s@example.com"}',
+      [id, id, id]),
+    'application/json');
+end;
+
+function TTestResources.GetForecast(const URI, city, date: string): TMCPResourceResult;
+begin
+  Result := TMCPResourceResult.Text(URI,
+    Format('{"city":"%s","date":"%s","temperature":18,"conditions":"sunny"}',
+      [city, date]),
+    'application/json');
 end;
 
 initialization

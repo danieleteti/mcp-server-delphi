@@ -22,6 +22,7 @@
    ## Features
 
    - **MCP Protocol 2025-03-26** compliant
+   - **Server, client AND agent**: build MCP servers, consume them with `TMCPClient`, and drive them from any OpenAI-compatible LLM via `TMCPOpenAIAgent` (works with OpenAI, OpenRouter, Anthropic-compat, Together, Groq, Ollama, vLLM, llama.cpp `--api`)
    - **Attribute-driven** tool/resource/prompt registration using RTTI
    - **Dual transport**: Streamable HTTP and stdio (select via `--transport http|stdio`)
    - **Session management** with automatic cleanup
@@ -211,6 +212,44 @@
      .AddResource('file:///report.csv', LCsvData, 'text/csv');
    ```
 
+   ### Resource URI Templates (RFC 6570 Level 1)
+
+   A resource whose URI contains `{placeholder}` segments is a **template**:
+   one declaration represents an unbounded family of concrete resources. The
+   framework lists templates under `resources/templates/list` and matches
+   incoming `resources/read` URIs against them automatically.
+
+   ```pascal
+   type
+     TMyResources = class(TMCPResourceProvider)
+     public
+       // Single-variable template
+       [MCPResource('user://{id}', 'User Profile',
+         'Returns a user profile by ID', 'application/json')]
+       function GetUser(const URI, id: string): TMCPResourceResult;
+
+       // Multi-variable template (canonical MCP spec example)
+       [MCPResource('weather://forecast/{city}/{date}', 'Weather Forecast',
+         'Returns the forecast for a city on a date', 'application/json')]
+       function GetForecast(const URI, city, date: string): TMCPResourceResult;
+     end;
+   ```
+
+   **Method signature contract**:
+   - First parameter is always the full concrete URI (matches the static-resource convention).
+   - One additional `string` parameter per `{var}` in the template, in left-to-right order.
+   - Parameter names must match the placeholder names (case-insensitive). The framework rejects mismatched signatures at startup.
+
+   **Dispatch order**: a `resources/read` request first looks up the URI in the
+   static registry (O(1)). On miss, registered templates are matched in turn
+   via cached regex (one capture group per `{var}`). Static resources keep
+   their pre-template performance.
+
+   **Limitations** (intentional): only RFC 6570 Level 1 (`{var}`) is supported.
+   Operators like `{+var}`, `{#var}`, `{?var}` are rejected at registration
+   time with a clear error. Each variable matches `[^/]+` (one path segment),
+   which covers the vast majority of resource template use cases.
+
    ### MCP Protocol Methods
 
    | Method | Description |
@@ -220,8 +259,9 @@
    | `ping` | Health check |
    | `tools/list` | Lists available tools |
    | `tools/call` | Executes a tool |
-   | `resources/list` | Lists available resources |
-   | `resources/read` | Reads a resource by URI |
+   | `resources/list` | Lists available concrete resources |
+   | `resources/templates/list` | Lists URI-templated resources (RFC 6570 Level 1) |
+   | `resources/read` | Reads a resource by URI (concrete or template-matched) |
    | `prompts/list` | Lists available prompts |
    | `prompts/get` | Gets a prompt with arguments |
 
@@ -268,16 +308,30 @@
 
    ## Testing ✅
 
-   The server is fully tested with a dedicated test project and a comprehensive Python compliance test suite (20+ test cases).
+   Three independent compliance suites cover the full library:
+
+   - **Python compliance suite** (`tests/test_mcp_server.py`) — 151 test cases exercising the server end-to-end over Streamable HTTP. Validates JSON-RPC 2.0, MCP protocol, session lifecycle, all `TMCPToolResult` content types, URI templates and error handling.
+   - **TMCPClient suite** (`tests/clientproject/`) — 17 Delphi test cases that drive the new client (`MVCFramework.MCP.Client`) against the running test server: handshake, tools, static + templated resources, prompts, JSON-RPC error envelope handling.
+   - **TMCPOpenAIAgent suite** (`tests/agentproject/`) — 8 Delphi test cases that exercise the agent loop (`MVCFramework.MCP.OpenAIAgent`) end-to-end. Embeds a deterministic fake LLM (a DMVCFramework controller responding to `/v1/chat/completions`) so the loop can be validated without external network dependencies. Covers single-tool dispatch, token accounting, system prompt prepending, OpenRouter analytics headers, and the `MaxTurns` safety net.
+
+   The test project (`tests/testproject/`) registers providers that exercise **every feature** of the server library:
 
    The test project (`tests/testproject/`) registers providers that exercise **every feature** of the library:
    - **18 tools** covering all `TMCPToolResult` factory methods: `Text`, `Error`, `Image`, `Audio`, `JSON`, `FromValue`, `FromObject`, `FromCollection`, `FromStream`, `Resource`, and the fluent `AddText`/`AddImage`/`AddResource` builder API
-   - **3 resources** — text (`application/json`, `text/plain`) and blob (`image/png`)
+   - **3 static resources** (text JSON, text plain, image blob) plus **2 templated resources** (`user://{id}` and `weather://forecast/{city}/{date}`) exercising single- and multi-variable URI templates
    - **3 prompts** — with required/optional arguments and multi-message conversations
    - **Conformance providers** — dedicated tools, resources, and prompts for MCP protocol conformance testing (text, image, audio, embedded resources, multi-content, error handling)
    - All parameter types: `string`, `Integer`, `Double`, `Boolean`, plus optional parameters
 
-   To run the compliance tests against the test server:
+   ### Running all suites at once (recommended)
+
+   ```cmd
+   cd tests
+   build_all.bat   :: builds testproject + clientproject + agentproject (Win32 Debug)
+   run_all.bat     :: starts the server, runs Python + TMCPClient + TMCPOpenAIAgent suites, exits non-zero on any failure
+   ```
+
+   ### Running individual suites
 
    ```bash
    # 1. Build the test server
@@ -290,6 +344,13 @@
 
    # 2b. Stdio transport: the suite launches the server as a subprocess
    python ../test_mcp_server_stdio.py -v
+
+   # 2c. Delphi TMCPClient compliance (server must be running)
+   ../clientproject/bin/MCPClientTest.exe --url http://localhost:8080/mcp
+
+   # 2d. Delphi TMCPOpenAIAgent compliance (server must be running;
+   #     the agent test starts its own fake LLM on port 9091)
+   ../agentproject/bin/MCPAgentTest.exe --mcp-url http://localhost:8080/mcp
    ```
 
    The stdio suite can point at any stdio-capable MCP server via
@@ -302,6 +363,7 @@
    - Session lifecycle (create, validate, delete, timeout)
    - Tool/Resource/Prompt execution and error handling
    - All content types: text, image, audio, embedded resources
+   - URI templates: `resources/templates/list` shape, multi-variable matching, rejection of unexpanded `{var}` URIs and incomplete-segment URIs
    - Concurrent sessions
    - HTTP method restrictions
    - Content type validation
@@ -313,6 +375,8 @@
    ├── sources/                                     # Core library
    │   ├── MVCFramework.MCP.Server.pas              # Server registry and endpoint
    │   ├── MVCFramework.MCP.RequestHandler.pas      # Transport-agnostic MCP dispatch
+   │   ├── MVCFramework.MCP.Client.pas              # MCP client over Streamable HTTP
+   │   ├── MVCFramework.MCP.OpenAIAgent.pas         # Agent loop: OpenAI-compat LLM + MCP tools
    │   ├── MVCFramework.MCP.Stdio.pas               # stdio transport (stdin/stdout)
    │   ├── MVCFramework.MCP.TransportConf.pas       # Early transport detection
    │   ├── MVCFramework.MCP.Attributes.pas          # Custom attributes
@@ -341,15 +405,22 @@
    │       ├── loggerpro.stdio.json                 # File-only appender config (stdio mode)
    │       └── generate_certificates.bat            # Self-signed SSL cert generator
    └── tests/
-       ├── test_mcp_server.py                       # Python compliance test suite
-       └── testproject/                             # Delphi test server (wizard-style layout)
-           ├── MCPServerUnitTest.dpr                # Slim entry point (HTTP + stdio)
-           ├── BootConfigU.pas                      # dotEnv + LoggerPro + profiler
-           ├── EngineConfigU.pas                    # Controllers + PublishObject wiring
-           ├── MCPTestToolsU.pas                    # 18 tools covering all result types
-           ├── MCPTestResourcesU.pas                # 3 resources (text + blob)
-           ├── MCPTestPromptsU.pas                  # 3 prompts with arguments
-           └── MCPConformanceProvidersU.pas         # Conformance test providers
+       ├── test_mcp_server.py                       # Python compliance suite (HTTP)
+       ├── test_mcp_server_stdio.py                 # Python compliance suite (stdio)
+       ├── build_all.bat                            # Builds all three test projects
+       ├── run_all.bat                              # Orchestrates the full pipeline
+       ├── testproject/                             # Delphi test server (wizard-style layout)
+       │   ├── MCPServerUnitTest.dpr                # Slim entry point (HTTP + stdio)
+       │   ├── BootConfigU.pas                      # dotEnv + LoggerPro + profiler
+       │   ├── EngineConfigU.pas                    # Controllers + PublishObject wiring
+       │   ├── MCPTestToolsU.pas                    # 18 tools covering all result types
+       │   ├── MCPTestResourcesU.pas                # 3 static + 2 templated resources
+       │   ├── MCPTestPromptsU.pas                  # 3 prompts with arguments
+       │   └── MCPConformanceProvidersU.pas         # Conformance test providers
+       ├── clientproject/                           # TMCPClient compliance (Delphi console)
+       │   └── MCPClientTest.dpr                    # 17 test cases
+       └── agentproject/                            # TMCPOpenAIAgent compliance (Delphi console)
+           └── MCPAgentTest.dpr                     # 8 test cases + embedded fake LLM controller
    ```
 
    ## Server architecture

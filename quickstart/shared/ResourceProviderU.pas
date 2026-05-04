@@ -39,6 +39,18 @@
 //   TMCPResourceResult.Text(URI, Content, MimeType)   --> text content
 //   TMCPResourceResult.Blob(URI, Base64Data, MimeType) --> binary content
 //
+// URI TEMPLATES (RFC 6570 Level 1):
+//   You can register PARAMETRIC resources by putting {placeholders} in the
+//   URI. The framework lists them under resources/templates/list and matches
+//   incoming concrete URIs against them at request time.
+//
+//   Example:   [MCPResource('user://{id}', ...)]
+//              function GetUser(const URI, id: string): TMCPResourceResult;
+//
+//   The method takes the full URI as its first parameter and one extra
+//   string parameter per placeholder, in left-to-right order. Parameter
+//   names must match the placeholder names (case-insensitive).
+//
 // ***************************************************************************
 
 unit ResourceProviderU;
@@ -81,6 +93,16 @@ type
     [MCPResource('file:///assets/icon.png', 'Application Icon',
       'Returns the application icon as a PNG image', 'image/png')]
     function GetIcon(const URI: string): TMCPResourceResult;
+
+    // A templated resource (RFC 6570 Level 1).
+    // The URI contains a {greeting} placeholder; the framework matches concrete
+    // URIs like greeting://world or greeting://everyone and binds the value to
+    // the "greeting" parameter below.
+    // URI Template: greeting://{greeting}
+    [MCPResource('greeting://{greeting}', 'Greeting',
+      'Returns a personalised greeting. Replace {greeting} with anything ' +
+      '(e.g. "world", "everyone").', 'text/plain')]
+    function GetGreeting(const URI, greeting: string): TMCPResourceResult;
 
   end;
 
@@ -131,6 +153,17 @@ begin
     URI,
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==',
     'image/png'
+  );
+end;
+
+function TMyResources.GetGreeting(const URI, greeting: string): TMCPResourceResult;
+begin
+  // The {greeting} value extracted from the URI is bound here.
+  // Example: a request for "greeting://world" yields greeting='world'.
+  Result := TMCPResourceResult.Text(
+    URI,
+    'Hello, ' + greeting + '!',
+    'text/plain'
   );
 end;
 

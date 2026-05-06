@@ -29,13 +29,13 @@ type
   TMyPrompts = class(TMCPPromptProvider)
   public
     [MCPPrompt('code_review', 'Generates a code review prompt for the given source code')]
-    [MCPPromptArg('code', 'The source code to review', True)]
-    [MCPPromptArg('language', 'Programming language (e.g. Pascal, Python)', False)]
+    [MCPPromptArg('code', 'The source code to review', TMCPParamPresence.Required)]
+    [MCPPromptArg('language', 'Programming language (e.g. Pascal, Python)', TMCPParamPresence.Optional)]
     function CodeReview(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('summarize', 'Generates a summarization prompt for the given text')]
-    [MCPPromptArg('text', 'The text to summarize', True)]
-    [MCPPromptArg('max_words', 'Maximum number of words for the summary', False)]
+    [MCPPromptArg('text', 'The text to summarize', TMCPParamPresence.Required)]
+    [MCPPromptArg('max_words', 'Maximum number of words for the summary', TMCPParamPresence.Optional)]
     function Summarize(const Arguments: TJDOJsonObject): TMCPPromptResult;
   end;
 

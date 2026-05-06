@@ -80,6 +80,7 @@ type
     FSessions: TDictionary<string, IMCPSession>;
     FLock: TCriticalSection;
     FSessionTimeoutMinutes: Integer;
+    FAutoRecover: Boolean;
   public
     constructor Create(ASessionTimeoutMinutes: Integer = 30);
     destructor Destroy; override;
@@ -88,6 +89,10 @@ type
     procedure DestroySession(const ASessionId: string);
     function SessionExists(const ASessionId: string): Boolean;
     procedure CleanupExpiredSessions;
+    { When True, an unknown but non-empty session ID is automatically restored
+      instead of triggering an error. Allows agents to reconnect after a server
+      restart without needing to be restarted themselves. Default: False. }
+    property AutoRecover: Boolean read FAutoRecover write FAutoRecover;
   end;
 
 implementation
@@ -215,6 +220,17 @@ begin
       end
       else
         LSession.Touch;
+    end;
+
+    { AutoRecover: an agent that cached this session ID from a previous server
+      run would otherwise get a hard error and need to be restarted.  Instead,
+      silently restore the session so the agent reconnects transparently. }
+    if not Result and FAutoRecover and not ASessionId.IsEmpty then
+    begin
+      LSession := TMCPSession.Create(ASessionId);
+      LSession.Initialized := True;
+      FSessions.Add(ASessionId, LSession);
+      Result := True;
     end;
   finally
     FLock.Leave;

@@ -650,7 +650,7 @@ begin
         if LParam.TypeKind = tkFloat then
           LSB.AppendLine('      // TODO: verify JSON schema type for parameter ''' + LParam.Name + '''');
         LSB.Append('      [MCPParam(''' + LParam.Description + '''');
-        if not LParam.Required then LSB.Append(', False');
+        if not LParam.Required then LSB.Append(', TMCPParamPresence.Optional');
         LSB.Append(')] const ' + LParam.Name + ': ');
         case LParam.TypeKind of
           tkInteger: LSB.Append('Integer');

@@ -26,6 +26,11 @@ unit MVCFramework.MCP.Attributes;
 
 interface
 
+{$SCOPEDENUMS ON}
+type
+  TMCPParamPresence = (Required, Optional);
+{$SCOPEDENUMS OFF}
+
 type
   { Marks a method as an MCP tool }
   MCPToolAttribute = class(TCustomAttribute)
@@ -45,7 +50,7 @@ type
     FDescription: string;
     FRequired: Boolean;
   public
-    constructor Create(const ADescription: string; ARequired: Boolean = True);
+    constructor Create(const ADescription: string; ARequired: TMCPParamPresence = TMCPParamPresence.Required);
     property Description: string read FDescription;
     property Required: Boolean read FRequired;
   end;
@@ -83,7 +88,7 @@ type
     FDescription: string;
     FRequired: Boolean;
   public
-    constructor Create(const AName, ADescription: string; ARequired: Boolean = False);
+    constructor Create(const AName, ADescription: string; ARequired: TMCPParamPresence = TMCPParamPresence.Optional);
     property Name: string read FName;
     property Description: string read FDescription;
     property Required: Boolean read FRequired;
@@ -102,11 +107,11 @@ end;
 
 { MCPParamAttribute }
 
-constructor MCPParamAttribute.Create(const ADescription: string; ARequired: Boolean);
+constructor MCPParamAttribute.Create(const ADescription: string; ARequired: TMCPParamPresence);
 begin
   inherited Create;
   FDescription := ADescription;
-  FRequired := ARequired;
+  FRequired := ARequired = TMCPParamPresence.Required;
 end;
 
 { MCPResourceAttribute }
@@ -131,12 +136,12 @@ end;
 
 { MCPPromptArgAttribute }
 
-constructor MCPPromptArgAttribute.Create(const AName, ADescription: string; ARequired: Boolean);
+constructor MCPPromptArgAttribute.Create(const AName, ADescription: string; ARequired: TMCPParamPresence);
 begin
   inherited Create;
   FName := AName;
   FDescription := ADescription;
-  FRequired := ARequired;
+  FRequired := ARequired = TMCPParamPresence.Required;
 end;
 
 end.

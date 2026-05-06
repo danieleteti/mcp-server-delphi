@@ -213,6 +213,31 @@
      .AddResource('file:///report.csv', LCsvData, 'text/csv');
    ```
 
+   ### Attributes
+
+   | Attribute | Target | Signature |
+   |-----------|--------|-----------|
+   | `[MCPTool(Name, Description)]` | Method | Registers the method as an MCP tool |
+   | `[MCPParam(Description)]` | Parameter | Required parameter (default) |
+   | `[MCPParam(Description, TMCPParamPresence.Optional)]` | Parameter | Optional parameter — receives a zero/empty default when omitted |
+   | `[MCPResource(URI, Name, Description, MimeType)]` | Method | Registers the method as an MCP resource |
+   | `[MCPPrompt(Name, Description)]` | Method | Registers the method as an MCP prompt |
+   | `[MCPPromptArg(Name, Description)]` | Method | Optional prompt argument (default) |
+   | `[MCPPromptArg(Name, Description, TMCPParamPresence.Required)]` | Method | Required prompt argument |
+
+   `TMCPParamPresence` is a scoped enum (`{$SCOPEDENUMS ON}`) with two values: `Required` and `Optional`. Every call site must use the fully qualified form. The parameter name and type are discovered automatically from the Delphi signature via RTTI — only the description (and optionally the presence) need to be spelled out in the attribute.
+
+   ```pascal
+   [MCPTool('concat_strings', 'Concatenates two strings with a separator')]
+   function ConcatStrings(
+     [MCPParam('First string')] const A: string;
+     [MCPParam('Second string')] const B: string;
+     [MCPParam('Separator (default: space)', TMCPParamPresence.Optional)] const Sep: string
+   ): TMCPToolResult;
+   ```
+
+   Supported parameter types: `string`, `Integer`, `Int64`, `Double`, `Boolean`. The library generates the corresponding JSON Schema `type` automatically.
+
    ### Resource URI Templates (RFC 6570 Level 1)
 
    A resource whose URI contains `{placeholder}` segments is a **template**:
@@ -312,7 +337,7 @@
    Three independent compliance suites cover the full library:
 
    - **Python compliance suite** (`tests/test_mcp_server.py`) — 151 test cases exercising the server end-to-end over Streamable HTTP. Validates JSON-RPC 2.0, MCP protocol, session lifecycle, all `TMCPToolResult` content types, URI templates and error handling.
-   - **TMCPClient suite** (`tests/clientproject/`) — 17 Delphi test cases that drive the client against the running test server. Runs **twice**: once over Streamable HTTP (`TMCPClient`) and once over stdio (`TMCPStdioClient` spawning the same testproject exe in stdio mode). Same test code, transport switched via `--stdio-cmd`. Covers: handshake, tools, static + templated resources, prompts, JSON-RPC error envelope handling.
+   - **TMCPClient suite** (`tests/clientproject/`) — 21 Delphi test cases that drive the client against the running test server. Runs **twice**: once over Streamable HTTP (`TMCPClient`) and once over stdio (`TMCPStdioClient` spawning the same testproject exe in stdio mode). Same test code, transport switched via `--stdio-cmd`. Covers: handshake, tools, static + templated resources, prompts, bridge proxy tools, JSON-RPC error envelope handling.
    - **TMCPOpenAIAgent suite** (`tests/agentproject/`) — 8 Delphi test cases that exercise the agent loop (`MVCFramework.MCP.OpenAIAgent`) end-to-end. Embeds a deterministic fake LLM (a DMVCFramework controller responding to `/v1/chat/completions`) so the loop can be validated without external network dependencies. Covers single-tool dispatch, token accounting, system prompt prepending, OpenRouter analytics headers, and the `MaxTurns` safety net.
 
    The test project (`tests/testproject/`) registers providers that exercise **every feature** of the server library:

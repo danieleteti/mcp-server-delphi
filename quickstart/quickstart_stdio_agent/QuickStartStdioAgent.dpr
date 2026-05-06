@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server for DMVCFramework - Quick Start (stdio agent)
 //
@@ -361,7 +361,7 @@ end;
 // REPL
 // ──────────────────────────────────────────────────────────────────────────
 
-procedure ReplLoop(AAgent: TMCPOpenAIAgent);
+procedure REPLLoop(AAgent: TMCPOpenAIAgent);
 var
   LMessages: TJSONArray;
   LUser: string;
@@ -463,6 +463,7 @@ var
   LTools: TJSONArray;
   LToolCount: Integer;
 begin
+  SetConsoleTheme(ConsoleThemeAlert);
   try
     Bootstrap;
     DrawHeader;
@@ -508,7 +509,7 @@ begin
         LAgent.MaxTurns := dotEnv.Env('agent.max_turns', 25);
         LAgent.SystemPrompt := BuildSystemPrompt;
         LAgent.SetMCPClient(LStdioClient, False); // we own the client below
-        ReplLoop(LAgent);
+        REPLLoop(LAgent);
       finally
         LAgent.Free;
       end;

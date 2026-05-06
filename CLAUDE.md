@@ -29,7 +29,7 @@ The project files can also be opened and built directly in the Delphi IDE.
 The library follows an **attribute-driven, RTTI-based discovery** pattern with DMVCFramework's `PublishObject` for JSON-RPC dispatch:
 
 - **MVCFramework.MCP.Server.pas** — Contains `TMCPServer` (shared registry, created once at startup, scans providers via RTTI) and `TMCPEndpoint` (published object, created per request via `PublishObject` factory). MCP method names with `/` are stripped in `OnBeforeRoutingHook` (e.g. `tools/list` → `ToolsList`).
-- **MVCFramework.MCP.Attributes.pas** — Custom attributes: `MCPToolAttribute` and `MCPParamAttribute` (placed on parameters) for tools, `MCPResourceAttribute`, `MCPPromptAttribute`, `MCPPromptArgAttribute`.
+- **MVCFramework.MCP.Attributes.pas** — Custom attributes: `MCPToolAttribute` and `MCPParamAttribute` (placed on parameters) for tools, `MCPResourceAttribute`, `MCPPromptAttribute`, `MCPPromptArgAttribute`. Parameter presence is expressed via `TMCPParamPresence = (Required, Optional)` (scoped enum, `{$SCOPEDENUMS ON}`) — the second argument of `[MCPParam]` and `[MCPPromptArg]`, defaulting to `Required` and `Optional` respectively.
 - **MVCFramework.MCP.Session.pas** — Thread-safe in-memory session manager with 30-minute timeout using `TCriticalSection`.
 - **MVCFramework.MCP.ToolProvider.pas / MVCFramework.MCP.ResourceProvider.pas / MVCFramework.MCP.PromptProvider.pas** — Base classes and result record types. Result types use factory methods (`TMCPToolResult.Text()`, `.Error()`, `.JSON()`, `.Image()`).
 - **MVCFramework.MCP.Types.pas** — Protocol constants and capability records.

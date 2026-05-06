@@ -112,7 +112,24 @@ end;
 procedure RunStdio;
 var
   LTransport: TMCPStdioTransport;
+  LEngine: TMVCEngine;
 begin
+  // Scan HTTP controllers so bridge tools are registered before stdio starts.
+  // The engine is only needed for route discovery — it is freed immediately
+  // after registration and the stdio transport never serves HTTP.
+  LEngine := TMVCEngine.Create(
+    procedure(Config: TMVCConfig)
+    begin
+      Config[TMVCConfigKey.DefaultContentType] := TMVCMediaType.APPLICATION_JSON;
+      Config[TMVCConfigKey.DefaultContentCharset] := TMVCConstants.DEFAULT_CONTENT_CHARSET;
+      Config[TMVCConfigKey.ExposeServerSignature] := 'false';
+    end);
+  try
+    ConfigureEngine(LEngine);
+  finally
+    LEngine.Free;
+  end;
+
   LTransport := TMCPStdioTransport.Create(TMCPServer.Instance);
   try
     LTransport.Run;

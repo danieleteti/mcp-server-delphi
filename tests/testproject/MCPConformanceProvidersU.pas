@@ -70,12 +70,12 @@ type
     function TestSimplePrompt(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('test_prompt_with_arguments', 'A prompt with arguments for conformance testing')]
-    [MCPPromptArg('arg1', 'First argument', True)]
-    [MCPPromptArg('arg2', 'Second argument', True)]
+    [MCPPromptArg('arg1', 'First argument', TMCPParamPresence.Required)]
+    [MCPPromptArg('arg2', 'Second argument', TMCPParamPresence.Required)]
     function TestPromptWithArguments(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('test_prompt_with_embedded_resource', 'A prompt with an embedded resource for conformance testing')]
-    [MCPPromptArg('resourceUri', 'URI of the resource to embed', True)]
+    [MCPPromptArg('resourceUri', 'URI of the resource to embed', TMCPParamPresence.Required)]
     function TestPromptWithEmbeddedResource(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('test_prompt_with_image', 'A prompt with an image for conformance testing')]

@@ -35,19 +35,19 @@ type
   TTestPrompts = class(TMCPPromptProvider)
   public
     [MCPPrompt('code_review', 'Generates a code review prompt for the given code')]
-    [MCPPromptArg('code', 'The source code to review', True)]
-    [MCPPromptArg('language', 'Programming language of the code', False)]
+    [MCPPromptArg('code', 'The source code to review', TMCPParamPresence.Required)]
+    [MCPPromptArg('language', 'Programming language of the code', TMCPParamPresence.Optional)]
     function CodeReview(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('summarize', 'Generates a summarization prompt')]
-    [MCPPromptArg('text', 'The text to summarize', True)]
-    [MCPPromptArg('maxLength', 'Maximum summary length in words', False)]
+    [MCPPromptArg('text', 'The text to summarize', TMCPParamPresence.Required)]
+    [MCPPromptArg('maxLength', 'Maximum summary length in words', TMCPParamPresence.Optional)]
     function Summarize(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     [MCPPrompt('translate', 'Generates a translation prompt')]
-    [MCPPromptArg('text', 'The text to translate', True)]
-    [MCPPromptArg('sourceLang', 'Source language', False)]
-    [MCPPromptArg('targetLang', 'Target language', True)]
+    [MCPPromptArg('text', 'The text to translate', TMCPParamPresence.Required)]
+    [MCPPromptArg('sourceLang', 'Source language', TMCPParamPresence.Optional)]
+    [MCPPromptArg('targetLang', 'Target language', TMCPParamPresence.Required)]
     function Translate(const Arguments: TJDOJsonObject): TMCPPromptResult;
   end;
 

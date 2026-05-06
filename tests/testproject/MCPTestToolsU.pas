@@ -53,7 +53,7 @@ type
     function ConcatStrings(
       [MCPParam('First string')] const A: string;
       [MCPParam('Second string')] const B: string;
-      [MCPParam('Separator between the strings', False)] const Separator: string
+      [MCPParam('Separator between the strings', TMCPParamPresence.Optional)] const Separator: string
     ): TMCPToolResult;
   end;
 

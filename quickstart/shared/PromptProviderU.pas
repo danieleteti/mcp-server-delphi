@@ -63,25 +63,25 @@ type
 
     // A prompt with one required and one optional argument.
     // Arguments are declared with [MCPPromptArg]:
-    //   - 'code' is required (True) — the AI must provide it
-    //   - 'language' is optional (False) — defaults to empty string if omitted
+    //   - 'code' is required — the AI must provide it
+    //   - 'language' is optional — defaults to empty string if omitted
     [MCPPrompt('code_review', 'Generates a code review prompt for the given source code')]
-    [MCPPromptArg('code', 'The source code to review', True)]
-    [MCPPromptArg('language', 'Programming language of the code (e.g. Pascal, Python)', False)]
+    [MCPPromptArg('code', 'The source code to review', TMCPParamPresence.Required)]
+    [MCPPromptArg('language', 'Programming language of the code (e.g. Pascal, Python)', TMCPParamPresence.Optional)]
     function CodeReview(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     // A simple prompt with one required argument.
     [MCPPrompt('summarize', 'Generates a summarization prompt for the given text')]
-    [MCPPromptArg('text', 'The text to summarize', True)]
-    [MCPPromptArg('max_words', 'Maximum number of words for the summary', False)]
+    [MCPPromptArg('text', 'The text to summarize', TMCPParamPresence.Required)]
+    [MCPPromptArg('max_words', 'Maximum number of words for the summary', TMCPParamPresence.Optional)]
     function Summarize(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
     // A multi-message prompt that sets up a conversation flow.
     // The assistant message "primes" the AI with the expected behavior.
     [MCPPrompt('translate', 'Generates a translation prompt')]
-    [MCPPromptArg('text', 'The text to translate', True)]
-    [MCPPromptArg('source_lang', 'Source language (auto-detect if omitted)', False)]
-    [MCPPromptArg('target_lang', 'Target language', True)]
+    [MCPPromptArg('text', 'The text to translate', TMCPParamPresence.Required)]
+    [MCPPromptArg('source_lang', 'Source language (auto-detect if omitted)', TMCPParamPresence.Optional)]
+    [MCPPromptArg('target_lang', 'Target language', TMCPParamPresence.Required)]
     function Translate(const Arguments: TJDOJsonObject): TMCPPromptResult;
 
   end;

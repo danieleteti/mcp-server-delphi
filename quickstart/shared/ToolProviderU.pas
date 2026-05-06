@@ -28,7 +28,7 @@
 //   The library auto-generates the JSON Schema for the AI client.
 //
 // OPTIONAL PARAMETERS:
-//   Use [MCPParam('Description', False)] to mark a parameter as optional.
+//   Use [MCPParam('Description', TMCPParamPresence.Optional)] to mark a parameter as optional.
 //   Optional parameters receive their default value when the AI doesn't
 //   provide them (empty string, 0, 0.0, False).
 //
@@ -96,13 +96,13 @@ type
 
     // A tool with an OPTIONAL parameter.
     // The second argument of MCPParam controls whether the parameter is
-    // required (True, default) or optional (False).
+    // required (TMCPParamPresence.Required, default) or optional (TMCPParamPresence.Optional).
     // When the AI omits "Separator", Delphi receives an empty string.
     [MCPTool('concat_strings', 'Concatenates two strings with a separator')]
     function ConcatStrings(
       [MCPParam('First string')] const A: string;
       [MCPParam('Second string')] const B: string;
-      [MCPParam('Separator between strings (default: space)', False)] const Separator: string
+      [MCPParam('Separator between strings (default: space)', TMCPParamPresence.Optional)] const Separator: string
     ): TMCPToolResult;
 
     // A tool that returns a Boolean result.

@@ -50,22 +50,18 @@ uses
   System.SysUtils,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Stdio,
-  // IMPORTANT: StdioOnly MUST be listed BEFORE the provider units.
-  // Its initialization section disables the default console logger so
-  // provider-registration LogI calls never leak on stdout (MCP stdio
-  // reserves stdout for JSON-RPC messages).
   MVCFramework.MCP.StdioOnly,
-  // --- Your MCP providers (shared with quickstart HTTP+stdio project) ---
-  // Customize these files in the ../shared/ folder.
   ToolProviderU in '..\shared\ToolProviderU.pas',
   ResourceProviderU in '..\shared\ResourceProviderU.pas',
-  PromptProviderU in '..\shared\PromptProviderU.pas';
+  PromptProviderU in '..\shared\PromptProviderU.pas',
+  BootConfigU in '..\shared\BootConfigU.pas';
 
 // {$R *.res}  // Uncomment after generating the .res file in Delphi IDE
 
 var
   LTransport: TMCPStdioTransport;
 begin
+  Boot;
   // --- Configure MCP server identity ---
   // These values are returned to AI clients during the "initialize" handshake.
   // Change them to match your application.

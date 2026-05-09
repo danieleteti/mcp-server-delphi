@@ -101,6 +101,9 @@ implementation
 uses
   MVCFramework.Logger;
 
+const
+  SESSION_CLEANUP_THRESHOLD = 50;
+
 { TMCPSession }
 
 constructor TMCPSession.Create(const ASessionId: string);
@@ -180,17 +183,22 @@ end;
 function TMCPInMemorySessionManager.CreateSession: IMCPSession;
 var
   LSessionId: string;
+  LNeedCleanup: Boolean;
 begin
   LSessionId := TGUID.NewGuid.ToString;
   { Remove braces from GUID }
   LSessionId := Copy(LSessionId, 2, Length(LSessionId) - 2);
   Result := TMCPSession.Create(LSessionId);
+  LNeedCleanup := False;
   FLock.Enter;
   try
     FSessions.Add(LSessionId, Result);
+    LNeedCleanup := (FSessions.Count mod SESSION_CLEANUP_THRESHOLD) = 0;
   finally
     FLock.Leave;
   end;
+  if LNeedCleanup then
+    CleanupExpiredSessions;
 end;
 
 function TMCPInMemorySessionManager.GetSession(const ASessionId: string): IMCPSession;

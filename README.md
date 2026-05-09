@@ -4,7 +4,7 @@
 
 # MCP Server for DMVCFramework
 
-   [![Version](https://img.shields.io/badge/version-0.8.0-brightgreen.svg)](https://github.com/danieleteti/mcp-server-delphi)
+   [![Version](https://img.shields.io/badge/version-0.8.2-brightgreen.svg)](https://github.com/danieleteti/mcp-server-delphi)
    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
    [![Delphi](https://img.shields.io/badge/Delphi-11%2B-purple.svg)](https://www.embarcadero.com/products/delphi)
 
@@ -336,11 +336,10 @@
 
    Three independent compliance suites cover the full library:
 
-   - **Python compliance suite** (`tests/test_mcp_server.py`) — 151 test cases exercising the server end-to-end over Streamable HTTP. Validates JSON-RPC 2.0, MCP protocol, session lifecycle, all `TMCPToolResult` content types, URI templates and error handling.
+   - **Python HTTP compliance suite** (`tests/test_mcp_server.py`) — 185 test cases exercising the server end-to-end over Streamable HTTP. Validates JSON-RPC 2.0, MCP protocol, session lifecycle, all `TMCPToolResult` content types, URI templates and error handling.
+   - **Python stdio compliance suite** (`tests/test_mcp_server_stdio.py`) — 142 test cases exercising the stdio transport end-to-end. Covers initialize, all protocol methods, batch rejection, stdout purity, notification semantics and error codes.
    - **TMCPClient suite** (`tests/clientproject/`) — 21 Delphi test cases that drive the client against the running test server. Runs **twice**: once over Streamable HTTP (`TMCPClient`) and once over stdio (`TMCPStdioClient` spawning the same testproject exe in stdio mode). Same test code, transport switched via `--stdio-cmd`. Covers: handshake, tools, static + templated resources, prompts, bridge proxy tools, JSON-RPC error envelope handling.
    - **TMCPOpenAIAgent suite** (`tests/agentproject/`) — 8 Delphi test cases that exercise the agent loop (`MVCFramework.MCP.OpenAIAgent`) end-to-end. Embeds a deterministic fake LLM (a DMVCFramework controller responding to `/v1/chat/completions`) so the loop can be validated without external network dependencies. Covers single-tool dispatch, token accounting, system prompt prepending, OpenRouter analytics headers, and the `MaxTurns` safety net.
-
-   The test project (`tests/testproject/`) registers providers that exercise **every feature** of the server library:
 
    The test project (`tests/testproject/`) registers providers that exercise **every feature** of the library:
    - **18 tools** covering all `TMCPToolResult` factory methods: `Text`, `Error`, `Image`, `Audio`, `JSON`, `FromValue`, `FromObject`, `FromCollection`, `FromStream`, `Resource`, and the fluent `AddText`/`AddImage`/`AddResource` builder API

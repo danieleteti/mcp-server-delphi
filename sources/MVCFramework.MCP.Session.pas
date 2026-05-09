@@ -189,7 +189,6 @@ begin
   { Remove braces from GUID }
   LSessionId := Copy(LSessionId, 2, Length(LSessionId) - 2);
   Result := TMCPSession.Create(LSessionId);
-  LNeedCleanup := False;
   FLock.Enter;
   try
     FSessions.Add(LSessionId, Result);

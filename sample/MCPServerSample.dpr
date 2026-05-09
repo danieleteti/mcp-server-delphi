@@ -190,7 +190,7 @@ begin
   begin
     LogI('** MCP Server Sample ** powered by DMVCFramework build ' + DMVCFRAMEWORK_VERSION);
     try
-      RunServer(dotEnv.Env('dmvc.server.port', 443));
+      RunServer(dotEnv.Env('dmvc.server.port', 8080));
     except
       on E: Exception do
         LogF(E.ClassName + ': ' + E.Message);

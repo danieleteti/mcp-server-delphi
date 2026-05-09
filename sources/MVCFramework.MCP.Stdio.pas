@@ -81,6 +81,15 @@ begin
     if LLine.Trim.IsEmpty then
       Continue;
 
+    { PC-4: JSON-RPC 2.0 batch requests (top-level array) are not supported }
+    if LLine.TrimLeft.StartsWith('[') then
+    begin
+      WriteLn(Output,
+        '{"jsonrpc":"2.0","error":{"code":-32600,"message":"Batch requests are not supported"},"id":null}');
+      Flush(Output);
+      Continue;
+    end;
+
     LRequest := nil;
     LResponse := nil;
     try
@@ -95,6 +104,15 @@ begin
           Flush(Output);
           Continue;
         end;
+      end;
+
+      { EH-2: guard against nil from non-object JSON (bare string, number, etc.) }
+      if LRequest = nil then
+      begin
+        WriteLn(Output,
+          '{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: not a JSON object"},"id":null}');
+        Flush(Output);
+        Continue;
       end;
 
       LHasId := LRequest.Contains('id');

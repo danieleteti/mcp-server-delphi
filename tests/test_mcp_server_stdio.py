@@ -996,6 +996,50 @@ def test_prompts(client: MCPStdioClient, result: TestResult) -> None:
         result.ok("prompts/get: unknown name returns error")
 
 
+# --- Batch and non-object JSON guards ---------------------------------
+
+def test_batch_request_returns_error(client: MCPStdioClient, result: TestResult) -> None:
+    """PC-4: batch JSON-RPC must get -32600 error."""
+    print("\n--- Batch Request Detection (PC-4) ---")
+
+    batch = json.dumps([
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+    ])
+    client.send_raw(batch)
+    body = client.recv(timeout=5)
+    if body is None:
+        result.fail("PC-4: batch request", "No response to batch request")
+        return
+    if "error" not in body:
+        result.fail("PC-4: batch request", f"Expected error for batch, got: {body}")
+        return
+    code = body["error"].get("code")
+    if code == -32600:
+        result.ok("PC-4: batch request returns -32600")
+    else:
+        result.fail("PC-4: batch request", f"Expected -32600, got {code}")
+
+
+def test_non_object_json_returns_parse_error(client: MCPStdioClient, result: TestResult) -> None:
+    """EH-2: non-object JSON must return parse error."""
+    print("\n--- Non-Object JSON Parse Guard (EH-2) ---")
+
+    client.send_raw('"just a string"')
+    body = client.recv(timeout=5)
+    if body is None:
+        result.fail("EH-2: non-object JSON", "No response to non-object JSON")
+        return
+    if "error" not in body:
+        result.fail("EH-2: non-object JSON", f"Expected error, got: {body}")
+        return
+    code = body["error"].get("code")
+    if code in (-32700, -32600):
+        result.ok(f"EH-2: non-object JSON returns parse error (code={code})")
+    else:
+        result.fail("EH-2: non-object JSON", f"Unexpected error code {code}")
+
+
 # --- JSON-RPC 2.0 compliance ------------------------------------------
 
 def test_jsonrpc_compliance(client: MCPStdioClient, result: TestResult) -> None:
@@ -1169,6 +1213,8 @@ def main() -> None:
         test_resources(client, result)
         test_prompts(client, result)
 
+        test_batch_request_returns_error(client, result)
+        test_non_object_json_returns_parse_error(client, result)
         test_jsonrpc_compliance(client, result)
         test_stdout_purity(client, result)
 

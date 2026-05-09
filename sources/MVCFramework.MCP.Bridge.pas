@@ -73,7 +73,6 @@ type
   private
     FBaseURL: string;
     FRoutes: TObjectList<TMCPBridgeRouteInfo>;
-    FHttpClient: THTTPClient;
     function FindRoute(const AToolName: string): TMCPBridgeRouteInfo;
     function BuildURL(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
     function BuildQueryString(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
@@ -384,14 +383,10 @@ begin
   inherited Create;
   FBaseURL := ABaseURL;
   FRoutes := TObjectList<TMCPBridgeRouteInfo>.Create(True);
-  FHttpClient := THTTPClient.Create;
-  FHttpClient.ContentType := 'application/json';
-  FHttpClient.Accept := 'application/json';
 end;
 
 destructor TMCPBridgeProvider.Destroy;
 begin
-  FHttpClient.Free;
   FRoutes.Free;
   inherited;
 end;
@@ -503,6 +498,7 @@ var
   LBodyStream: TStringStream;
   LHasBody: Boolean;
   LBodyContent: string;
+  LHttpClient: THTTPClient;
 begin
   LRoute := FindRoute(AToolName);
   if LRoute = nil then
@@ -521,35 +517,42 @@ begin
       Break;
     end;
 
-  LBodyStream := nil;
-  if LHasBody then
-    LBodyStream := TStringStream.Create(LBodyContent, TEncoding.UTF8);
+  LHttpClient := THTTPClient.Create;
+  LHttpClient.ContentType := 'application/json';
+  LHttpClient.Accept := 'application/json';
   try
+    LBodyStream := nil;
+    if LHasBody then
+      LBodyStream := TStringStream.Create(LBodyContent, TEncoding.UTF8);
     try
-      if SameText(LRoute.HTTPMethod, 'GET') then
-        LResp := FHttpClient.Get(LURL)
-      else if SameText(LRoute.HTTPMethod, 'DELETE') then
-        LResp := FHttpClient.Delete(LURL)
-      else if SameText(LRoute.HTTPMethod, 'POST') then
-        LResp := FHttpClient.Post(LURL, LBodyStream)
-      else if SameText(LRoute.HTTPMethod, 'PUT') then
-        LResp := FHttpClient.Put(LURL, LBodyStream)
-      else if SameText(LRoute.HTTPMethod, 'PATCH') then
-        LResp := FHttpClient.Patch(LURL, LBodyStream)
-      else
-        LResp := FHttpClient.Get(LURL);
+      try
+        if SameText(LRoute.HTTPMethod, 'GET') then
+          LResp := LHttpClient.Get(LURL)
+        else if SameText(LRoute.HTTPMethod, 'DELETE') then
+          LResp := LHttpClient.Delete(LURL)
+        else if SameText(LRoute.HTTPMethod, 'POST') then
+          LResp := LHttpClient.Post(LURL, LBodyStream)
+        else if SameText(LRoute.HTTPMethod, 'PUT') then
+          LResp := LHttpClient.Put(LURL, LBodyStream)
+        else if SameText(LRoute.HTTPMethod, 'PATCH') then
+          LResp := LHttpClient.Patch(LURL, LBodyStream)
+        else
+          LResp := LHttpClient.Get(LURL);
 
-      if LResp.StatusCode < 400 then
-        Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))
-      else
-        Result := TMCPToolResult.Error(
-          'HTTP ' + LResp.StatusCode.ToString + ': ' + LResp.ContentAsString(TEncoding.UTF8));
-    except
-      on E: Exception do
-        Result := TMCPToolResult.Error('Network error: ' + E.Message);
+        if LResp.StatusCode < 400 then
+          Result := TMCPToolResult.Text(LResp.ContentAsString(TEncoding.UTF8))
+        else
+          Result := TMCPToolResult.Error(
+            'HTTP ' + LResp.StatusCode.ToString + ': ' + LResp.ContentAsString(TEncoding.UTF8));
+      except
+        on E: Exception do
+          Result := TMCPToolResult.Error('Network error: ' + E.Message);
+      end;
+    finally
+      LBodyStream.Free;
     end;
   finally
-    LBodyStream.Free;
+    LHttpClient.Free;
   end;
 end;
 

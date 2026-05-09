@@ -1443,6 +1443,24 @@ def test_delete_session(client: MCPTestClient, result: TestResult):
     client.session_id = saved
 
 
+# --- SEC-1: AutoRecover security ---
+
+def test_sec1_fabricated_session_rejected(client: MCPTestClient, result: TestResult):
+    """SEC-1: a fabricated session ID (no prior initialize) must be rejected with an error."""
+    print("\n--- SEC-1: Fabricated Session ID ---")
+
+    fabricated_id = str(uuid.uuid4())
+    saved = client.session_id
+    client.session_id = fabricated_id
+    resp = client.rpc_request("tools/list")
+    client.session_id = saved
+
+    body = assert_jsonrpc(result, "SEC-1: fabricated session ID rejected", resp,
+                          expect_error=True)
+    if body and "error" in body:
+        result.ok("SEC-1: tools/list with fabricated session returns error")
+
+
 # --- AC-2 and AC-5 compliance tests ---
 
 def test_bool_tool_result_is_lowercase(client: MCPTestClient, result: TestResult):
@@ -1531,6 +1549,9 @@ def main():
 
     # Prompts
     test_prompts(client, result)
+
+    # SEC-1: fabricated session ID
+    test_sec1_fabricated_session_rejected(client, result)
 
     # AC-2 and AC-5 compliance tests
     print("\n--- AC-2 and AC-5 Compliance ---")

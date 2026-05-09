@@ -81,6 +81,7 @@ type
     FLock: TCriticalSection;
     FSessionTimeoutMinutes: Integer;
     FAutoRecover: Boolean;
+    procedure SetAutoRecover(const AValue: Boolean);
   public
     constructor Create(ASessionTimeoutMinutes: Integer = 30);
     destructor Destroy; override;
@@ -92,10 +93,13 @@ type
     { When True, an unknown but non-empty session ID is automatically restored
       instead of triggering an error. Allows agents to reconnect after a server
       restart without needing to be restarted themselves. Default: False. }
-    property AutoRecover: Boolean read FAutoRecover write FAutoRecover;
+    property AutoRecover: Boolean read FAutoRecover write SetAutoRecover;
   end;
 
 implementation
+
+uses
+  MVCFramework.Logger;
 
 { TMCPSession }
 
@@ -149,6 +153,14 @@ begin
 end;
 
 { TMCPInMemorySessionManager }
+
+procedure TMCPInMemorySessionManager.SetAutoRecover(const AValue: Boolean);
+begin
+  if AValue and not FAutoRecover then
+    LogW('MCP: AutoRecover=True — any non-empty session ID is silently accepted ' +
+      'without validation. Intended for development only. DISABLE before production.');
+  FAutoRecover := AValue;
+end;
 
 constructor TMCPInMemorySessionManager.Create(ASessionTimeoutMinutes: Integer);
 begin

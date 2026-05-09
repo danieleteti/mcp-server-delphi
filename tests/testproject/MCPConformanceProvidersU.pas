@@ -57,10 +57,12 @@ type
 
   TConformanceResources = class(TMCPResourceProvider)
   public
-    [MCPResource('test://static-text', 'Static text resource for conformance testing', 'text/plain')]
+    [MCPResource('test://static-text', 'Static text resource',
+      'Static text resource for conformance testing', 'text/plain')]
     function StaticText(const URI: string): TMCPResourceResult;
 
-    [MCPResource('test://static-binary', 'Static binary resource for conformance testing', 'image/png')]
+    [MCPResource('test://static-binary', 'Static binary resource',
+      'Static binary resource for conformance testing', 'image/png')]
     function StaticBinary(const URI: string): TMCPResourceResult;
   end;
 

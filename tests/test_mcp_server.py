@@ -1443,6 +1443,34 @@ def test_delete_session(client: MCPTestClient, result: TestResult):
     client.session_id = saved
 
 
+# --- AC-2 and AC-5 compliance tests ---
+
+def test_bool_tool_result_is_lowercase(client: MCPTestClient, result: TestResult):
+    """AC-2: TMCPToolResult.FromValue(Boolean) must return 'true'/'false' not 'True'/'False'."""
+    resp = client.call_tool("is_even", {"Value": 4})
+    assert resp.status_code == 200, f"Tool call failed: {resp.text}"
+    body = resp.json()
+    content = body["result"]["content"]
+    assert len(content) > 0, "No content in result"
+    text = content[0]["text"]
+    assert text in ("true", "false"), \
+        f"AC-2: Expected 'true' or 'false', got '{text}'"
+    assert text == "true", f"AC-2: is_even(4) should be 'true', got '{text}'"
+    result.ok("AC-2: is_even(4) returns lowercase 'true'")
+
+
+def test_conformance_binary_resource_mime_type(client: MCPTestClient, result: TestResult):
+    """AC-5: test://static-binary must be listed with mimeType 'image/png'."""
+    resp = client.rpc_request("resources/list")
+    assert resp.status_code == 200
+    resources = resp.json()["result"]["resources"]
+    binary = next((r for r in resources if r["uri"] == "test://static-binary"), None)
+    assert binary is not None, "test://static-binary not found in resources/list"
+    assert binary["mimeType"] == "image/png", \
+        f"AC-5: Expected 'image/png', got '{binary['mimeType']}'"
+    result.ok("AC-5: test://static-binary has correct mimeType='image/png'")
+
+
 # --- Main ---
 
 def main():
@@ -1503,6 +1531,11 @@ def main():
 
     # Prompts
     test_prompts(client, result)
+
+    # AC-2 and AC-5 compliance tests
+    print("\n--- AC-2 and AC-5 Compliance ---")
+    test_bool_tool_result_is_lowercase(client, result)
+    test_conformance_binary_resource_mime_type(client, result)
 
     # Protocol compliance
     test_http_methods(client, result)

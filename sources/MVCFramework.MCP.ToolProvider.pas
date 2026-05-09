@@ -385,7 +385,10 @@ end;
 
 class function TMCPToolResult.FromValue(const AValue: Boolean): TMCPToolResult;
 begin
-  Result := TMCPToolResult.Text(BoolToStr(AValue, True));
+  if AValue then
+    Result := TMCPToolResult.Text('true')
+  else
+    Result := TMCPToolResult.Text('false');
 end;
 
 { TMCPToolResult - Convenience: Stream -> base64 ImageContent }

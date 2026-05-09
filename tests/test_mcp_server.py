@@ -1540,6 +1540,360 @@ def test_conformance_binary_resource_mime_type(client: MCPTestClient, result: Te
     result.ok("AC-5: test://static-binary has correct mimeType='image/png'")
 
 
+# --- Additional integration tests ---
+
+def test_initialize_twice_creates_different_sessions(client: MCPTestClient, result: TestResult):
+    """Two initialize calls must return different session IDs."""
+    print("\n--- Initialize Twice: Different Sessions ---")
+
+    resp_a = client.rpc_request("initialize", {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": "ClientX", "version": "1.0"},
+    }, include_session=False)
+    session_a = resp_a.headers.get(SESSION_HEADER)
+
+    resp_b = client.rpc_request("initialize", {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": "ClientY", "version": "1.0"},
+    }, include_session=False)
+    session_b = resp_b.headers.get(SESSION_HEADER)
+
+    if not session_a:
+        result.fail("two-initialize: session A", "No session ID in first initialize response")
+        return
+    if not session_b:
+        result.fail("two-initialize: session B", "No session ID in second initialize response")
+        return
+    if session_a == session_b:
+        result.fail("two-initialize: unique IDs",
+                    f"Both initialize calls returned the same session ID: {session_a}")
+    else:
+        result.ok(f"two-initialize: distinct IDs ({session_a[:8]}... vs {session_b[:8]}...)")
+
+
+def test_delete_session_returns_204(client: MCPTestClient, result: TestResult):
+    """DELETE /mcp with valid session must return 204."""
+    print("\n--- DELETE Session Returns 204 ---")
+
+    # Create a fresh session
+    resp = client.rpc_request("initialize", {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+    }, include_session=False)
+    temp_session = resp.headers.get(SESSION_HEADER)
+
+    if not temp_session:
+        result.fail("delete-204: create session", "Failed to create test session")
+        return
+
+    del_resp = requests.delete(client.base_url, headers={SESSION_HEADER: temp_session})
+    if del_resp.status_code == 204:
+        result.ok("delete-204: DELETE returns 204 No Content")
+    elif del_resp.status_code == 200:
+        result.ok("delete-204: DELETE returns 200 (accepted, 204 preferred)")
+    else:
+        result.fail("delete-204: status", f"Expected 204, got {del_resp.status_code}")
+
+
+def test_delete_nonexistent_session_returns_404(client: MCPTestClient, result: TestResult):
+    """DELETE /mcp with unknown session must return 404."""
+    print("\n--- DELETE Nonexistent Session Returns 404 ---")
+
+    fake_session = str(uuid.uuid4())
+    resp = requests.delete(client.base_url, headers={SESSION_HEADER: fake_session})
+    if resp.status_code == 404:
+        result.ok("delete-404: unknown session returns 404")
+    else:
+        result.fail("delete-404: status",
+                    f"Expected 404 for unknown session, got {resp.status_code}")
+
+
+def test_delete_without_session_returns_400(client: MCPTestClient, result: TestResult):
+    """DELETE /mcp without session header must return 400."""
+    print("\n--- DELETE Without Session Returns 400 ---")
+
+    resp = requests.delete(client.base_url)
+    if resp.status_code == 400:
+        result.ok("delete-400: missing session header returns 400")
+    else:
+        result.fail("delete-400: status",
+                    f"Expected 400 for DELETE without session, got {resp.status_code}")
+
+
+def test_ping_requires_session(client: MCPTestClient, result: TestResult):
+    """ping without session must return error."""
+    print("\n--- Ping Requires Session ---")
+
+    saved = client.session_id
+    client.session_id = None
+    resp = client.rpc_request("ping", include_session=False)
+    client.session_id = saved
+
+    try:
+        body = resp.json()
+    except Exception:
+        result.fail("ping-no-session", "Response is not valid JSON")
+        return
+
+    if "error" in body:
+        result.ok("ping-no-session: ping without session returns error")
+    else:
+        result.fail("ping-no-session",
+                    f"Expected error for ping without session, got: {body}")
+
+
+def test_tools_list_required_fields(client: MCPTestClient, result: TestResult):
+    """tools/list: each tool must have name, description, inputSchema with type=object."""
+    print("\n--- Tools List Required Fields ---")
+
+    resp = client.rpc_request("tools/list")
+    body = assert_jsonrpc(result, "tools-required-fields: list", resp)
+    if not body:
+        return
+
+    tools = body["result"].get("tools", [])
+    if not tools:
+        result.fail("tools-required-fields: count", "No tools returned")
+        return
+
+    all_ok = True
+    for tool in tools:
+        name = tool.get("name", "<unnamed>")
+        if "name" not in tool:
+            result.fail(f"tools-required-fields: {name}", "Missing 'name'")
+            all_ok = False
+        elif "description" not in tool:
+            result.fail(f"tools-required-fields: {name}", "Missing 'description'")
+            all_ok = False
+        elif "inputSchema" not in tool:
+            result.fail(f"tools-required-fields: {name}", "Missing 'inputSchema'")
+            all_ok = False
+        elif tool["inputSchema"].get("type") != "object":
+            result.fail(f"tools-required-fields: {name}",
+                        f"inputSchema.type must be 'object', got '{tool['inputSchema'].get('type')}'")
+            all_ok = False
+
+    if all_ok:
+        result.ok(f"tools-required-fields: all {len(tools)} tools have required fields")
+
+
+def test_tools_call_unknown_tool_returns_error(client: MCPTestClient, result: TestResult):
+    """tools/call with unknown tool name must return error or isError."""
+    print("\n--- Tools Call Unknown Tool Returns Error ---")
+
+    resp = client.call_tool("__nonexistent_tool_xyz__")
+    body = assert_jsonrpc(result, "unknown-tool: error response", resp, expect_error=True)
+    if body:
+        result.ok("unknown-tool: unknown tool name returns JSON-RPC error")
+
+
+def test_resources_list_required_fields(client: MCPTestClient, result: TestResult):
+    """resources/list: each resource must have uri, name, mimeType."""
+    print("\n--- Resources List Required Fields ---")
+
+    resp = client.rpc_request("resources/list")
+    body = assert_jsonrpc(result, "resources-required-fields: list", resp)
+    if not body:
+        return
+
+    resources = body["result"].get("resources", [])
+    if not resources:
+        result.fail("resources-required-fields: count", "No resources returned")
+        return
+
+    all_ok = True
+    for res in resources:
+        name = res.get("name", "<unnamed>")
+        for field in ("uri", "name", "mimeType"):
+            if field not in res:
+                result.fail(f"resources-required-fields: {name}",
+                            f"Missing required field '{field}'")
+                all_ok = False
+
+    if all_ok:
+        result.ok(f"resources-required-fields: all {len(resources)} resources have required fields")
+
+
+def test_resources_read_blob_has_blob_not_text(client: MCPTestClient, result: TestResult):
+    """resources/read on test://static-binary: result must have 'blob' field, not 'text'."""
+    print("\n--- Resources Read Blob Has blob Not text ---")
+
+    resp = client.rpc_request("resources/read", {"uri": "test://static-binary"})
+    body = assert_jsonrpc(result, "blob-resource: read", resp)
+    if not body:
+        return
+
+    contents = body["result"].get("contents", [])
+    if not contents:
+        result.fail("blob-resource: contents", "Empty contents array")
+        return
+
+    item = contents[0]
+    if "blob" in item and "text" not in item:
+        result.ok("blob-resource: has 'blob' field and no 'text' field")
+    elif "blob" in item:
+        result.fail("blob-resource: fields",
+                    "'blob' field present but 'text' field also present (should be exclusive)")
+    else:
+        result.fail("blob-resource: fields",
+                    f"Expected 'blob' field for binary resource, got fields: {list(item.keys())}")
+
+
+def test_resources_read_nonexistent_returns_error(client: MCPTestClient, result: TestResult):
+    """resources/read on unknown URI must return error."""
+    print("\n--- Resources Read Nonexistent Returns Error ---")
+
+    resp = client.rpc_request("resources/read", {"uri": "nonexistent://totally-unknown-uri"})
+    body = assert_jsonrpc(result, "nonexistent-resource: error", resp, expect_error=True)
+    if body:
+        result.ok("nonexistent-resource: unknown URI returns JSON-RPC error")
+
+
+def test_resources_templates_list_returns_array(client: MCPTestClient, result: TestResult):
+    """resources/templates/list must return resourceTemplates array."""
+    print("\n--- Resources Templates List Returns Array ---")
+
+    resp = client.rpc_request("resources/templates/list")
+    body = assert_jsonrpc(result, "templates-list: success", resp)
+    if not body:
+        return
+
+    templates = body["result"].get("resourceTemplates")
+    if isinstance(templates, list):
+        result.ok(f"templates-list: returned 'resourceTemplates' array ({len(templates)} items)")
+    else:
+        result.fail("templates-list: shape",
+                    f"Expected 'resourceTemplates' to be a list, got {type(templates).__name__}")
+
+
+def test_prompts_list_required_fields(client: MCPTestClient, result: TestResult):
+    """prompts/list: each prompt must have name, description."""
+    print("\n--- Prompts List Required Fields ---")
+
+    resp = client.rpc_request("prompts/list")
+    body = assert_jsonrpc(result, "prompts-required-fields: list", resp)
+    if not body:
+        return
+
+    prompts = body["result"].get("prompts", [])
+    if not prompts:
+        result.fail("prompts-required-fields: count", "No prompts returned")
+        return
+
+    all_ok = True
+    for prompt in prompts:
+        name = prompt.get("name", "<unnamed>")
+        for field in ("name", "description"):
+            if field not in prompt:
+                result.fail(f"prompts-required-fields: {name}",
+                            f"Missing required field '{field}'")
+                all_ok = False
+
+    if all_ok:
+        result.ok(f"prompts-required-fields: all {len(prompts)} prompts have required fields")
+
+
+def test_prompts_get_nonexistent_returns_error(client: MCPTestClient, result: TestResult):
+    """prompts/get on unknown name must return error."""
+    print("\n--- Prompts Get Nonexistent Returns Error ---")
+
+    resp = client.rpc_request("prompts/get", {"name": "__totally_unknown_prompt_xyz__"})
+    body = assert_jsonrpc(result, "nonexistent-prompt: error", resp, expect_error=True)
+    if body:
+        result.ok("nonexistent-prompt: unknown name returns JSON-RPC error")
+
+
+def test_tool_error_content_has_iserror(client: MCPTestClient, result: TestResult):
+    """test_error_handling tool must return isError=true in result."""
+    print("\n--- Tool Error Content Has isError ---")
+
+    resp = client.call_tool("test_error_handling")
+    body = assert_jsonrpc(result, "tool-iserror: call", resp)
+    if not body:
+        return
+
+    r = body["result"]
+    if r.get("isError") is True:
+        result.ok("tool-iserror: test_error_handling returns isError=true")
+    else:
+        result.fail("tool-iserror: isError",
+                    f"Expected isError=true, got {r.get('isError')}")
+
+
+def test_tool_multiple_content_items(client: MCPTestClient, result: TestResult):
+    """test_multiple_content_types must return more than one content item."""
+    print("\n--- Tool Multiple Content Items ---")
+
+    resp = client.call_tool("test_multiple_content_types")
+    body = assert_jsonrpc(result, "multi-content: call", resp)
+    if not body:
+        return
+
+    content = body["result"].get("content", [])
+    if len(content) > 1:
+        result.ok(f"multi-content: returned {len(content)} content items (> 1)")
+    else:
+        result.fail("multi-content: count",
+                    f"Expected more than 1 content item, got {len(content)}")
+
+
+def test_tool_image_content_fields(client: MCPTestClient, result: TestResult):
+    """test_image_content must return content with type='image', 'data', 'mimeType'."""
+    print("\n--- Tool Image Content Fields ---")
+
+    resp = client.call_tool("test_image_content")
+    body = assert_jsonrpc(result, "image-content: call", resp)
+    if not body:
+        return
+
+    content = body["result"].get("content", [])
+    if not content:
+        result.fail("image-content: content", "Empty content array")
+        return
+
+    item = content[0]
+    if item.get("type") != "image":
+        result.fail("image-content: type",
+                    f"Expected type='image', got '{item.get('type')}'")
+        return
+
+    result.ok("image-content: type is 'image'")
+
+    if "data" not in item:
+        result.fail("image-content: data", "Missing 'data' field")
+    else:
+        result.ok("image-content: 'data' field present")
+
+    if "mimeType" not in item:
+        result.fail("image-content: mimeType", "Missing 'mimeType' field")
+    else:
+        result.ok(f"image-content: mimeType='{item['mimeType']}'")
+
+
+def test_invalid_jsonrpc_version(client: MCPTestClient, result: TestResult):
+    """jsonrpc '1.0' instead of '2.0' must return error."""
+    print("\n--- Invalid JSON-RPC Version ---")
+
+    resp = client.post({
+        "jsonrpc": "1.0",
+        "id": client.next_id(),
+        "method": "ping",
+    }, include_session=True)
+
+    try:
+        body = resp.json()
+    except Exception:
+        result.fail("invalid-version: parse", "Response is not valid JSON")
+        return
+
+    if "error" in body:
+        result.ok("invalid-version: jsonrpc '1.0' returns error")
+    else:
+        result.fail("invalid-version: expected error",
+                    f"Expected error for jsonrpc='1.0', got: {body}")
+
+
 # --- Main ---
 
 def main():
@@ -1619,6 +1973,25 @@ def main():
     test_http_methods(client, result)
     test_jsonrpc_compliance(client, result)
     test_delete_session(client, result)
+
+    # Additional integration tests
+    test_initialize_twice_creates_different_sessions(client, result)
+    test_delete_session_returns_204(client, result)
+    test_delete_nonexistent_session_returns_404(client, result)
+    test_delete_without_session_returns_400(client, result)
+    test_ping_requires_session(client, result)
+    test_tools_list_required_fields(client, result)
+    test_tools_call_unknown_tool_returns_error(client, result)
+    test_resources_list_required_fields(client, result)
+    test_resources_read_blob_has_blob_not_text(client, result)
+    test_resources_read_nonexistent_returns_error(client, result)
+    test_resources_templates_list_returns_array(client, result)
+    test_prompts_list_required_fields(client, result)
+    test_prompts_get_nonexistent_returns_error(client, result)
+    test_tool_error_content_has_iserror(client, result)
+    test_tool_multiple_content_items(client, result)
+    test_tool_image_content_fields(client, result)
+    test_invalid_jsonrpc_version(client, result)
 
     success = result.summary()
     sys.exit(0 if success else 1)

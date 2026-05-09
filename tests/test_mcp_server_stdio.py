@@ -1126,6 +1126,197 @@ def test_stdout_purity(client: MCPStdioClient, result: TestResult) -> None:
                     f"{len(bad)} polluting line(s) on stdout, first: {bad[0][:200]}")
 
 
+# --- Additional integration tests ---
+
+def test_ping_returns_empty_object(client: MCPStdioClient, result: TestResult) -> None:
+    """ping must return result == {}"""
+    print("\n--- Ping Returns Empty Object ---")
+
+    body = client.rpc_request("ping")
+    body = assert_jsonrpc(result, "ping-empty: success", body)
+    if not body:
+        return
+
+    r = body.get("result")
+    if r == {} or r is None:
+        result.ok("ping-empty: result is empty object {}")
+    else:
+        result.fail("ping-empty: result",
+                    f"Expected empty object {{}}, got {r!r}")
+
+
+def test_tools_list_returns_array(client: MCPStdioClient, result: TestResult) -> None:
+    """tools/list must return tools array after initialize"""
+    print("\n--- Tools List Returns Array ---")
+
+    body = client.rpc_request("tools/list")
+    body = assert_jsonrpc(result, "tools-array: success", body)
+    if not body:
+        return
+
+    tools = body["result"].get("tools")
+    if isinstance(tools, list):
+        result.ok(f"tools-array: returned 'tools' array ({len(tools)} items)")
+    else:
+        result.fail("tools-array: shape",
+                    f"Expected 'tools' to be a list, got {type(tools).__name__}")
+
+
+def test_resources_list_returns_array(client: MCPStdioClient, result: TestResult) -> None:
+    """resources/list must return resources array"""
+    print("\n--- Resources List Returns Array ---")
+
+    body = client.rpc_request("resources/list")
+    body = assert_jsonrpc(result, "resources-array: success", body)
+    if not body:
+        return
+
+    resources = body["result"].get("resources")
+    if isinstance(resources, list):
+        result.ok(f"resources-array: returned 'resources' array ({len(resources)} items)")
+    else:
+        result.fail("resources-array: shape",
+                    f"Expected 'resources' to be a list, got {type(resources).__name__}")
+
+
+def test_prompts_list_returns_array(client: MCPStdioClient, result: TestResult) -> None:
+    """prompts/list must return prompts array"""
+    print("\n--- Prompts List Returns Array ---")
+
+    body = client.rpc_request("prompts/list")
+    body = assert_jsonrpc(result, "prompts-array: success", body)
+    if not body:
+        return
+
+    prompts = body["result"].get("prompts")
+    if isinstance(prompts, list):
+        result.ok(f"prompts-array: returned 'prompts' array ({len(prompts)} items)")
+    else:
+        result.fail("prompts-array: shape",
+                    f"Expected 'prompts' to be a list, got {type(prompts).__name__}")
+
+
+def test_tools_call_simple_text(client: MCPStdioClient, result: TestResult) -> None:
+    """tools/call test_simple_text must return content with text"""
+    print("\n--- Tools Call Simple Text ---")
+
+    body = client.call_tool("test_simple_text")
+    body = assert_jsonrpc(result, "simple-text: call", body)
+    if not body:
+        return
+
+    content = body["result"].get("content", [])
+    if not content:
+        result.fail("simple-text: content", "Empty content array")
+        return
+
+    item = content[0]
+    if item.get("type") == "text" and item.get("text"):
+        result.ok(f"simple-text: returned text content: '{item['text'][:60]}'")
+    else:
+        result.fail("simple-text: content item",
+                    f"Expected type='text' with non-empty text, got {item!r}")
+
+
+def test_unknown_method_returns_error(client: MCPStdioClient, result: TestResult) -> None:
+    """unknown method with id must return error"""
+    print("\n--- Unknown Method Returns Error ---")
+
+    body = client.rpc_request("totally/unknown/method/xyz")
+    body = assert_jsonrpc(result, "unknown-method: error", body, expect_error=True)
+    if body:
+        code = body["error"].get("code")
+        if code in (-32601, -32603):
+            result.ok(f"unknown-method: returns error code {code}")
+        else:
+            result.fail("unknown-method: error code",
+                        f"Expected -32601 or -32603, got {code}")
+
+
+def test_notification_produces_no_response(client: MCPStdioClient, result: TestResult) -> None:
+    """notifications/cancelled (no id) must not produce a response line"""
+    print("\n--- Notification Produces No Response ---")
+
+    client.rpc_notification("notifications/cancelled", {"requestId": 999, "reason": "test"})
+    # Allow a brief moment for any spurious output
+    time.sleep(0.2)
+    try:
+        line = client.out_queue.get_nowait()
+    except queue.Empty:
+        line = None
+
+    if line is None:
+        result.ok("notification-no-response: notifications/cancelled produced no stdout line")
+    else:
+        result.fail("notification-no-response",
+                    f"Server sent unexpected response to notification: {str(line)[:200]}")
+        # Put it back so subsequent tests are not affected
+        client.out_queue.put(line)
+
+
+def test_empty_lines_ignored(client: MCPStdioClient, result: TestResult) -> None:
+    """multiple empty lines must produce no response"""
+    print("\n--- Empty Lines Ignored ---")
+
+    for _ in range(3):
+        client.send_raw("")
+
+    # Send a probe ping to verify the server is still alive and responsive
+    probe_id = client.next_id()
+    client.send({"jsonrpc": "2.0", "id": probe_id, "method": "ping"})
+    body = client.recv(timeout=DEFAULT_TIMEOUT)
+
+    if body and body.get("id") == probe_id and "result" in body:
+        result.ok("empty-lines: ignored, server still answers next request correctly")
+    elif body:
+        result.fail("empty-lines: probe ping",
+                    f"Unexpected response after empty lines: {body!r}")
+    else:
+        result.fail("empty-lines: probe ping", "No response after empty lines")
+
+
+def test_invalid_json_returns_parse_error(client: MCPStdioClient, result: TestResult) -> None:
+    """malformed JSON must return -32700"""
+    print("\n--- Invalid JSON Returns Parse Error ---")
+
+    client.send_raw("{bad json !!!")
+    body = client.recv(timeout=DEFAULT_TIMEOUT)
+
+    if body is None:
+        result.fail("parse-error: response", "No response to malformed JSON")
+        return
+
+    if "error" not in body:
+        result.fail("parse-error: error field", f"Expected error response, got {body!r}")
+        return
+
+    code = body["error"].get("code")
+    if code == -32700:
+        result.ok("parse-error: malformed JSON returns -32700")
+    else:
+        result.fail("parse-error: error code",
+                    f"Expected -32700, got {code}")
+
+
+def test_string_id_preserved_in_response(client: MCPStdioClient, result: TestResult) -> None:
+    """response id must match string request id"""
+    print("\n--- String ID Preserved in Response ---")
+
+    str_id = "my-unique-string-id-99"
+    client.send({"jsonrpc": "2.0", "id": str_id, "method": "ping"})
+    body = client.recv(timeout=DEFAULT_TIMEOUT)
+
+    if body is None:
+        result.fail("string-id: response", "No response received")
+        return
+
+    if body.get("id") == str_id:
+        result.ok(f"string-id: response id matches '{str_id}'")
+    else:
+        result.fail("string-id: id mismatch",
+                    f"Expected id='{str_id}', got {body.get('id')!r}")
+
+
 def test_fresh_process_pre_init_ping(cmd: list[str], verbose: bool,
                                      result: TestResult) -> None:
     """Spin up a fresh subprocess and call `ping` BEFORE initialize.
@@ -1217,6 +1408,18 @@ def main() -> None:
         test_non_object_json_returns_parse_error(client, result)
         test_jsonrpc_compliance(client, result)
         test_stdout_purity(client, result)
+
+        # Additional integration tests
+        test_ping_returns_empty_object(client, result)
+        test_tools_list_returns_array(client, result)
+        test_resources_list_returns_array(client, result)
+        test_prompts_list_returns_array(client, result)
+        test_tools_call_simple_text(client, result)
+        test_unknown_method_returns_error(client, result)
+        test_notification_produces_no_response(client, result)
+        test_empty_lines_ignored(client, result)
+        test_invalid_json_returns_parse_error(client, result)
+        test_string_id_preserved_in_response(client, result)
 
     finally:
         client.stop()

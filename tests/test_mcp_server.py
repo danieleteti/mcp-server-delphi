@@ -1443,6 +1443,35 @@ def test_delete_session(client: MCPTestClient, result: TestResult):
     client.session_id = saved
 
 
+# --- PC-2: session error code -32001 ---
+
+def test_pc2_session_error_code(client: MCPTestClient, result: TestResult):
+    """PC-2: tools/list with no session header must return error code -32001."""
+    print("\n--- PC-2: Session Error Code -32001 ---")
+
+    saved = client.session_id
+    client.session_id = None
+    resp = client.rpc_request("tools/list", include_session=False)
+    client.session_id = saved
+
+    try:
+        body = resp.json()
+    except Exception:
+        result.fail("PC-2: session error code", "Response is not valid JSON")
+        return
+
+    if "error" not in body:
+        result.fail("PC-2: session error code", "Expected error response, got success")
+        return
+
+    code = body["error"].get("code")
+    if code == -32001:
+        result.ok("PC-2: tools/list with no session returns error code -32001")
+    else:
+        result.fail("PC-2: session error code",
+                    f"Expected -32001, got {code}")
+
+
 # --- PC-1: Version negotiation ---
 
 def test_pc1_version_negotiation(client: MCPTestClient, result: TestResult):
@@ -1571,6 +1600,9 @@ def main():
 
     # Prompts
     test_prompts(client, result)
+
+    # PC-2: session error code -32001
+    test_pc2_session_error_code(client, result)
 
     # PC-1: version negotiation
     test_pc1_version_negotiation(client, result)

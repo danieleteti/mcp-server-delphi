@@ -45,7 +45,8 @@ implementation
 uses
   System.SysUtils, System.Classes,
   JsonDataObjects,
-  MVCFramework.MCP.Server;
+  MVCFramework.MCP.Server,
+  MVCFramework.MCP.Types;
 
 { TMCPStdioTransport }
 
@@ -132,7 +133,7 @@ begin
             LErrorResponse := TJDOJsonObject.Create;
             try
               LErrorResponse.S['jsonrpc'] := '2.0';
-              LErrorResponse.O['error'].I['code'] := -32600;
+              LErrorResponse.O['error'].I['code'] := MCP_ERR_SESSION;
               LErrorResponse.O['error'].S['message'] := E.Message;
               case LRequest.Types['id'] of
                 jdtString:

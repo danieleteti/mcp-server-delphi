@@ -789,7 +789,7 @@ begin
       FHandler.ValidateSession(LMethod);
     except
       on E: EMCPSessionError do
-        raise EMVCJSONRPCError.Create(JSONRPC_ERR_INVALID_REQUEST, E.Message);
+        raise EMVCJSONRPCError.Create(MCP_ERR_SESSION, E.Message);
     end;
   end;
 end;

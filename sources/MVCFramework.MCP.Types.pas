@@ -34,6 +34,7 @@ const
   MCP_PROTOCOL_VERSION = '2025-03-26';
   MCP_ENDPOINT = '/mcp';
   MCP_SESSION_HEADER = 'Mcp-Session-Id';
+  MCP_ERR_SESSION = -32001;
 
 type
   TMCPCapabilities = record

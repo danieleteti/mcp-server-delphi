@@ -120,6 +120,7 @@ type
   private
     FServerName: string;
     FServerVersion: string;
+    FServerInstructions: string;
     FSessionManager: IMCPSessionManager;
     FTools: TObjectDictionary<string, TMCPToolInfo>;
     FResources: TObjectDictionary<string, TMCPResourceInfo>;
@@ -157,6 +158,7 @@ type
 
     property ServerName: string read FServerName write FServerName;
     property ServerVersion: string read FServerVersion write FServerVersion;
+    property ServerInstructions: string read FServerInstructions write FServerInstructions;
     property SessionManager: IMCPSessionManager read FSessionManager;
     property Tools: TObjectDictionary<string, TMCPToolInfo> read FTools;
     property Resources: TObjectDictionary<string, TMCPResourceInfo> read FResources;

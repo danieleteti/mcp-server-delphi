@@ -1443,6 +1443,28 @@ def test_delete_session(client: MCPTestClient, result: TestResult):
     client.session_id = saved
 
 
+# --- PC-1: Version negotiation ---
+
+def test_pc1_version_negotiation(client: MCPTestClient, result: TestResult):
+    """PC-1: server must respond with its own protocolVersion regardless of client version."""
+    print("\n--- PC-1: Version Negotiation ---")
+
+    resp = client.rpc_request("initialize", {
+        "protocolVersion": "2099-01-01",
+        "capabilities": {},
+        "clientInfo": {"name": "FutureClient", "version": "99.0"}
+    }, include_session=False)
+
+    body = assert_jsonrpc(result, "PC-1: initialize with future version", resp)
+    if body and "result" in body:
+        server_version = body["result"].get("protocolVersion", "")
+        if server_version == MCP_PROTOCOL_VERSION:
+            result.ok(f"PC-1: server responded with its own version ({server_version})")
+        else:
+            result.fail("PC-1: protocolVersion",
+                        f"Expected {MCP_PROTOCOL_VERSION}, got '{server_version}'")
+
+
 # --- SEC-1: AutoRecover security ---
 
 def test_sec1_fabricated_session_rejected(client: MCPTestClient, result: TestResult):
@@ -1549,6 +1571,9 @@ def main():
 
     # Prompts
     test_prompts(client, result)
+
+    # PC-1: version negotiation
+    test_pc1_version_negotiation(client, result)
 
     # SEC-1: fabricated session ID
     test_sec1_fabricated_session_rejected(client, result)

@@ -225,6 +225,15 @@ begin
   if LServer.ServerVersion = '1.0.0' then
     LogW('MCP: ServerVersion is default "1.0.0". Set TMCPServer.Instance.ServerVersion in .dpr.');
 
+  { PC-1: Version negotiation }
+  var LClientVersion: string;
+  LClientVersion := '';
+  if AParams <> nil then
+    LClientVersion := AParams.S['protocolVersion'];
+  if (not LClientVersion.IsEmpty) and (LClientVersion <> MCP_PROTOCOL_VERSION) then
+    LogW('MCP: Client requested version "' + LClientVersion +
+      '", server implements "' + MCP_PROTOCOL_VERSION + '". Responding with server version.');
+
   LSession := LServer.SessionManager.CreateSession;
   FSessionId := LSession.SessionId;
 
@@ -245,6 +254,8 @@ begin
   Result.O['capabilities'] := LCaps.ToJSON;
   Result.O['serverInfo'].S['name'] := LServer.ServerName;
   Result.O['serverInfo'].S['version'] := LServer.ServerVersion;
+  if not LServer.ServerInstructions.IsEmpty then
+    Result.S['instructions'] := LServer.ServerInstructions;
 end;
 
 procedure TMCPRequestHandler.DoNotificationsInitialized;

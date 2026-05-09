@@ -240,6 +240,8 @@ end;
 constructor TMCPServer.Create(ASessionManager: IMCPSessionManager);
 begin
   inherited Create;
+  FServerName    := 'MCPServer';
+  FServerVersion := '1.0.0';
   FTools := TObjectDictionary<string, TMCPToolInfo>.Create([doOwnsValues]);
   FResources := TObjectDictionary<string, TMCPResourceInfo>.Create([doOwnsValues]);
   FPrompts := TObjectDictionary<string, TMCPPromptInfo>.Create([doOwnsValues]);

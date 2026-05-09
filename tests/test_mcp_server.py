@@ -1353,6 +1353,63 @@ def test_concurrent_sessions(client: MCPTestClient, result: TestResult):
     client.session_id = saved
 
 
+def test_concurrent_initialize_does_not_corrupt_server_name(client: MCPTestClient, result: TestResult):
+    """TS-2: concurrent initialize calls must not corrupt ServerName/ServerVersion."""
+    print("\n--- Concurrent Initialize (TS-2) ---")
+    import threading
+    import requests as req_lib
+
+    results_list = []
+    errors_list = []
+    base_url = client.base_url
+
+    def do_init():
+        try:
+            resp = req_lib.post(
+                base_url,
+                json={
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "clientInfo": {"name": "ThreadTest", "version": "1.0"},
+                    }
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=10,
+            )
+            body = resp.json()
+            if "result" not in body:
+                errors_list.append(f"Missing result: {body}")
+                return
+            name = body["result"]["serverInfo"]["name"]
+            if not name or len(name) == 0:
+                errors_list.append(f"Empty serverInfo.name")
+                return
+            results_list.append(name)
+        except Exception as e:
+            errors_list.append(str(e))
+
+    threads = [threading.Thread(target=do_init) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    if errors_list:
+        result.fail("TS-2: concurrent initialize", f"Errors in concurrent initialize: {errors_list}")
+        return
+
+    if len(results_list) != 10:
+        result.fail("TS-2: concurrent initialize", f"Only {len(results_list)}/10 calls succeeded")
+        return
+
+    if not all(r == results_list[0] for r in results_list):
+        result.fail("TS-2: concurrent initialize", f"Inconsistent serverInfo.name: {set(results_list)}")
+        return
+
+    result.ok(f"TS-2: 10 concurrent initialize calls all returned consistent serverInfo.name='{results_list[0]}'")
+
+
 def test_delete_session(client: MCPTestClient, result: TestResult):
     """MCP spec: DELETE on the endpoint should destroy the session."""
     print("\n--- DELETE Session ---")
@@ -1423,6 +1480,7 @@ def main():
     test_session_management(client, result)
     test_session_header_on_all_responses(client, result)
     test_concurrent_sessions(client, result)
+    test_concurrent_initialize_does_not_corrupt_server_name(client, result)
     test_ping(client, result)
     test_content_types_header(client, result)
     test_response_id_matches_request(client, result)

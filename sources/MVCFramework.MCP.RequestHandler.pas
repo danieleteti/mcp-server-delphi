@@ -218,19 +218,12 @@ var
 begin
   LServer := TMCPServer(FServer);
 
-  { Apply defaults for unconfigured server identity }
-  if LServer.ServerName.IsEmpty then
-  begin
-    LServer.ServerName := 'MCPServer';
-    LogW('MCP: ServerName not configured, using default "MCPServer". ' +
-      'Set TMCPServer.Instance.ServerName in the .dpr.');
-  end;
-  if LServer.ServerVersion.IsEmpty then
-  begin
-    LServer.ServerVersion := '1.0.0';
-    LogW('MCP: ServerVersion not configured, using default "1.0.0". ' +
-      'Set TMCPServer.Instance.ServerVersion in the .dpr.');
-  end;
+  { Log if server identity is still at default values — developer reminder.
+    Defaults are set in TMCPServer.Create; do NOT write here (race condition). }
+  if LServer.ServerName = 'MCPServer' then
+    LogW('MCP: ServerName is default "MCPServer". Set TMCPServer.Instance.ServerName in .dpr.');
+  if LServer.ServerVersion = '1.0.0' then
+    LogW('MCP: ServerVersion is default "1.0.0". Set TMCPServer.Instance.ServerVersion in .dpr.');
 
   LSession := LServer.SessionManager.CreateSession;
   FSessionId := LSession.SessionId;

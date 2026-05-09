@@ -799,6 +799,41 @@ def test_resources(client: MCPTestClient, result: TestResult):
         result.ok("resources/read: unknown URI returns error")
 
 
+def test_resource_result_stable_on_repeated_reads(client: MCPTestClient, result: TestResult):
+    """EH-1: resources/read must return consistent content on repeated calls (no record copy corruption)."""
+    print("\n--- Resource Result Stability (EH-1) ---")
+
+    resp1 = client.rpc_request("resources/read", {"uri": "file:///docs/readme.txt"})
+    resp2 = client.rpc_request("resources/read", {"uri": "file:///docs/readme.txt"})
+    if resp1.status_code != 200:
+        result.fail("EH-1: first read", f"HTTP {resp1.status_code} {resp1.text}")
+        return
+    if resp2.status_code != 200:
+        result.fail("EH-1: second read", f"HTTP {resp2.status_code} {resp2.text}")
+        return
+    body1 = resp1.json()
+    body2 = resp2.json()
+    if "result" not in body1:
+        result.fail("EH-1: first read", f"Missing result: {body1}")
+        return
+    if "result" not in body2:
+        result.fail("EH-1: second read", f"Missing result: {body2}")
+        return
+    contents1 = body1["result"].get("contents", [])
+    contents2 = body2["result"].get("contents", [])
+    if len(contents1) != 1:
+        result.fail("EH-1: first read contents", f"Expected 1 content item, got {contents1}")
+        return
+    if len(contents2) != 1:
+        result.fail("EH-1: second read contents", f"Expected 1 content item, got {contents2}")
+        return
+    if contents1[0].get("text") == contents2[0].get("text"):
+        result.ok("EH-1: resource content consistent across repeated reads (no record copy corruption)")
+    else:
+        result.fail("EH-1: content mismatch",
+                    "Resource content changed between calls - record copy corruption")
+
+
 # --- Resource templates (RFC 6570 Level 1) ---
 
 def test_resource_templates(client: MCPTestClient, result: TestResult):
@@ -1405,6 +1440,7 @@ def main():
 
     # Resources
     test_resources(client, result)
+    test_resource_result_stable_on_repeated_reads(client, result)
     test_resource_templates(client, result)
 
     # Prompts

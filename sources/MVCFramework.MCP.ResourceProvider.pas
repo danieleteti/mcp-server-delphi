@@ -31,11 +31,27 @@ uses
 
 type
   TMCPResourceResult = record
+  private type
+    IContentHolder = interface
+      function GetContents: TJDOJsonArray;
+      procedure ReleaseContents;
+    end;
+    TContentHolder = class(TInterfacedObject, IContentHolder)
+    private
+      FContents: TJDOJsonArray;
+    public
+      constructor Create(AContents: TJDOJsonArray);
+      destructor Destroy; override;
+      function GetContents: TJDOJsonArray;
+      procedure ReleaseContents;
+    end;
   private
-    FContents: TJDOJsonArray;
+    FHolder: IContentHolder;
   public
-    class function Text(const AURI, AText: string; const AMimeType: string = 'text/plain'): TMCPResourceResult; static;
-    class function Blob(const AURI, ABase64Data: string; const AMimeType: string = 'application/octet-stream'): TMCPResourceResult; static;
+    class function Text(const AURI, AText: string;
+      const AMimeType: string = 'text/plain'): TMCPResourceResult; static;
+    class function Blob(const AURI, ABase64Data: string;
+      const AMimeType: string = 'application/octet-stream'): TMCPResourceResult; static;
     function ToJSON: TJDOJsonObject;
   end;
 
@@ -49,37 +65,70 @@ type
 
 implementation
 
+{ TMCPResourceResult.TContentHolder }
+
+constructor TMCPResourceResult.TContentHolder.Create(AContents: TJDOJsonArray);
+begin
+  inherited Create;
+  FContents := AContents;
+end;
+
+destructor TMCPResourceResult.TContentHolder.Destroy;
+begin
+  FContents.Free;
+  inherited;
+end;
+
+function TMCPResourceResult.TContentHolder.GetContents: TJDOJsonArray;
+begin
+  Result := FContents;
+end;
+
+procedure TMCPResourceResult.TContentHolder.ReleaseContents;
+begin
+  FContents := nil;
+end;
+
 { TMCPResourceResult }
 
-class function TMCPResourceResult.Text(const AURI, AText: string; const AMimeType: string): TMCPResourceResult;
+class function TMCPResourceResult.Text(const AURI, AText: string;
+  const AMimeType: string): TMCPResourceResult;
 var
+  LContents: TJDOJsonArray;
   LItem: TJDOJsonObject;
 begin
-  Result.FContents := TJDOJsonArray.Create;
-  LItem := Result.FContents.AddObject;
+  LContents := TJDOJsonArray.Create;
+  LItem := LContents.AddObject;
   LItem.S['uri'] := AURI;
   LItem.S['mimeType'] := AMimeType;
   LItem.S['text'] := AText;
+  Result.FHolder := TContentHolder.Create(LContents);
 end;
 
-class function TMCPResourceResult.Blob(const AURI, ABase64Data: string; const AMimeType: string): TMCPResourceResult;
+class function TMCPResourceResult.Blob(const AURI, ABase64Data: string;
+  const AMimeType: string): TMCPResourceResult;
 var
+  LContents: TJDOJsonArray;
   LItem: TJDOJsonObject;
 begin
-  Result.FContents := TJDOJsonArray.Create;
-  LItem := Result.FContents.AddObject;
+  LContents := TJDOJsonArray.Create;
+  LItem := LContents.AddObject;
   LItem.S['uri'] := AURI;
   LItem.S['mimeType'] := AMimeType;
   LItem.S['blob'] := ABase64Data;
+  Result.FHolder := TContentHolder.Create(LContents);
 end;
 
 function TMCPResourceResult.ToJSON: TJDOJsonObject;
+var
+  LContents: TJDOJsonArray;
 begin
   Result := TJDOJsonObject.Create;
-  if FContents <> nil then
+  if FHolder <> nil then
   begin
-    Result.A['contents'] := FContents;
-    FContents := nil; { Ownership transferred }
+    LContents := FHolder.GetContents;
+    FHolder.ReleaseContents;
+    Result.A['contents'] := LContents;
   end
   else
     Result.A['contents'] := TJDOJsonArray.Create;

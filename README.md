@@ -11,6 +11,8 @@
    A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server implementation for [DMVCFramework](https://github.com/danieleteti/delphimvcframework), enabling Delphi
    applications to expose tools, resources, and prompts to AI assistants via the standardized MCP protocol.
 
+   📖 **[MCP Server for Delphi — Official Documentation & Full Guide](https://www.danieleteti.it/mcp-server-delphi/)**
+
    > 🚀 **MCP Server with DMVCFramework? Sure! Even for on-premises AI engines.**
    >
    > This means, for instance, you can integrate your ERP functionality directly into any AI client.
@@ -492,6 +494,7 @@
 
    ## Links
 
+   - [MCP Server for Delphi — Official Documentation & Full Guide](https://www.danieleteti.it/mcp-server-delphi/)
    - [Model Context Protocol Specification](https://modelcontextprotocol.io/specification/2025-03-26)
    - [DMVCFramework](https://github.com/danieleteti/delphimvcframework)
    - [Issue Tracker](https://github.com/danieleteti/delphimvcframework/issues)

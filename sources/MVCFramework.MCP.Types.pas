@@ -30,7 +30,7 @@ uses
   JsonDataObjects;
 
 const
-  MCP_SERVER_LIBRARY_VERSION = '0.8.0';
+  MCP_SERVER_LIBRARY_VERSION = '0.8.2';
   MCP_PROTOCOL_VERSION = '2025-03-26';
   MCP_ENDPOINT = '/mcp';
   MCP_SESSION_HEADER = 'Mcp-Session-Id';

@@ -34,6 +34,7 @@ type
   private
     FHandler: TMCPRequestHandler;
     procedure LogStderr(const AMessage: string);
+    procedure WriteResponse(const AJson: string);
   public
     constructor Create(AServer: TObject);
     destructor Destroy; override;
@@ -47,6 +48,11 @@ uses
   JsonDataObjects,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.Types;
+
+const
+  { UTF-8 code page. Declared locally so this unit stays portable and does
+    not need to pull in Winapi.Windows just for the constant. }
+  CP_UTF8 = 65001;
 
 { TMCPStdioTransport }
 
@@ -67,6 +73,17 @@ begin
   System.Write(ErrOutput, AMessage + sLineBreak);
 end;
 
+procedure TMCPStdioTransport.WriteResponse(const AJson: string);
+begin
+  { MCP stdio framing: one UTF-8 JSON message terminated by a single LF
+    (0x0A). We append the LF ourselves rather than using WriteLn, which
+    would emit a platform line break (CRLF on Windows). Output's code page
+    is forced to UTF-8 in Run, so non-ASCII payloads travel intact. Flush
+    so the client - which blocks on a line read - sees it immediately. }
+  System.Write(Output, AJson + #10);
+  Flush(Output);
+end;
+
 procedure TMCPStdioTransport.Run;
 var
   LLine: string;
@@ -75,6 +92,15 @@ var
   LErrorResponse: TJDOJsonObject;
   LHasId: Boolean;
 begin
+  { MCP stdio requires UTF-8 on the wire. The standard Input/Output text
+    files otherwise use the console/ANSI code page on Windows, which
+    corrupts every non-ASCII byte (accented text, EUR sign, emoji, CJK...).
+    The stdio client reads and writes UTF-8, so force UTF-8 on both ends
+    here. Without this, tools returning non-ASCII text produce garbled
+    output even though all-ASCII payloads work. }
+  SetTextCodePage(Input, CP_UTF8);
+  SetTextCodePage(Output, CP_UTF8);
+
   LogStderr('MCP stdio transport started');
   while not EOF(Input) do
   begin
@@ -85,9 +111,8 @@ begin
     { PC-4: JSON-RPC 2.0 batch requests (top-level array) are not supported }
     if LLine.TrimLeft.StartsWith('[') then
     begin
-      WriteLn(Output,
+      WriteResponse(
         '{"jsonrpc":"2.0","error":{"code":-32600,"message":"Batch requests are not supported"},"id":null}');
-      Flush(Output);
       Continue;
     end;
 
@@ -100,9 +125,8 @@ begin
         on E: Exception do
         begin
           { Parse error - build JSON manually to ensure id is null }
-          WriteLn(Output, '{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: ' +
+          WriteResponse('{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: ' +
             E.Message.Replace('\', '\\').Replace('"', '\"') + '"},"id":null}');
-          Flush(Output);
           Continue;
         end;
       end;
@@ -110,9 +134,8 @@ begin
       { EH-2: guard against nil from non-object JSON (bare string, number, etc.) }
       if LRequest = nil then
       begin
-        WriteLn(Output,
+        WriteResponse(
           '{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: not a JSON object"},"id":null}');
-        Flush(Output);
         Continue;
       end;
 
@@ -121,10 +144,7 @@ begin
       try
         LResponse := FHandler.HandleRequest(LRequest);
         if LResponse <> nil then
-        begin
-          WriteLn(Output, LResponse.ToJSON(True));
-          Flush(Output);
-        end;
+          WriteResponse(LResponse.ToJSON(True));
       except
         on E: EMCPSessionError do
         begin
@@ -145,8 +165,7 @@ begin
               else
                 LErrorResponse.S['id'] := LRequest.S['id'];
               end;
-              WriteLn(Output, LErrorResponse.ToJSON(True));
-              Flush(Output);
+              WriteResponse(LErrorResponse.ToJSON(True));
             finally
               LErrorResponse.Free;
             end;
@@ -176,8 +195,7 @@ begin
               else
                 LErrorResponse.S['id'] := LRequest.S['id'];
               end;
-              WriteLn(Output, LErrorResponse.ToJSON(True));
-              Flush(Output);
+              WriteResponse(LErrorResponse.ToJSON(True));
             finally
               LErrorResponse.Free;
             end;
@@ -186,9 +204,8 @@ begin
           begin
             { No id - build JSON manually to ensure id is JSON null, not
               missing and not an empty string. }
-            WriteLn(Output, '{"jsonrpc":"2.0","error":{"code":-32600,"message":"' +
+            WriteResponse('{"jsonrpc":"2.0","error":{"code":-32600,"message":"' +
               E.Message.Replace('\', '\\').Replace('"', '\"') + '"},"id":null}');
-            Flush(Output);
           end;
         end;
         on E: Exception do
@@ -211,8 +228,7 @@ begin
               else
                 LErrorResponse.S['id'] := LRequest.S['id'];
               end;
-              WriteLn(Output, LErrorResponse.ToJSON(True));
-              Flush(Output);
+              WriteResponse(LErrorResponse.ToJSON(True));
             finally
               LErrorResponse.Free;
             end;

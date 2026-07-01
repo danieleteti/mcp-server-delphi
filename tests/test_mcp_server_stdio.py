@@ -515,6 +515,38 @@ def test_text_tools(client: MCPStdioClient, result: TestResult) -> None:
                         f"Expected 'hello world', got '{text}'")
 
 
+def test_utf8_roundtrip(client: MCPStdioClient, result: TestResult) -> None:
+    """Regression: non-ASCII payloads must survive the stdio wire intact.
+
+    The stdio transport frames each message as UTF-8. A regression to
+    text-mode ANSI I/O (the pre-0.8.2 behaviour on Windows) would emit e.g.
+    an a-grave as a lone 0xE0 byte - invalid UTF-8 that breaks the client
+    decoder with an "invalid continuation byte" error. The echo tool returns
+    its Message argument verbatim, so an exact round-trip proves the bytes
+    were neither transcoded through a legacy code page nor corrupted.
+    """
+    print("\n--- UTF-8 Round-Trip (regression) ---")
+
+    samples = {
+        "accented (Latin-1)": "citta perche naive facade: città perché naïve façade",
+        "currency + symbols": "€ £ ¥ © ® — «»",
+        "CJK": "日本語 中文 한국어",
+        "emoji (astral plane)": "rocket \U0001f680 sparkles ✨ check ✅",
+        "mixed": "città €uro 日本語 \U0001f680 ñåø",
+    }
+
+    for label, sample in samples.items():
+        body = assert_jsonrpc(result, f"utf8 echo: {label}",
+                              client.call_tool("echo", {"Message": sample}))
+        if body:
+            text = get_tool_text(body)
+            if text == sample:
+                result.ok(f"utf8 round-trip intact: {label}")
+            else:
+                result.fail(f"utf8 echo: {label}",
+                            f"corrupted on the wire: sent {sample!r}, got {text!r}")
+
+
 # --- Numeric tools ------------------------------------------------------
 
 def test_numeric_tools(client: MCPStdioClient, result: TestResult) -> None:
@@ -1395,6 +1427,7 @@ def main() -> None:
 
         test_tools_list(client, result)
         test_text_tools(client, result)
+        test_utf8_roundtrip(client, result)
         test_numeric_tools(client, result)
         test_serialization_tools(client, result)
         test_content_type_tools(client, result)

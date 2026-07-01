@@ -95,7 +95,7 @@
 
    ## Testing ✅
 
-   Extensively tested by four independent compliance suites: a Python HTTP suite (185 cases), a Python stdio suite (142 cases), a `TMCPClient` suite (21 Delphi cases, run over both HTTP and stdio), and a `TMCPOpenAIAgent` suite (8 Delphi cases driving the agent loop against an embedded fake LLM). See the [documentation](https://www.danieleteti.it/mcp-server-delphi/) for how to build and run them.
+   Extensively tested by four independent compliance suites: a Python HTTP suite (185 cases), a Python stdio suite (147 cases), a `TMCPClient` suite (21 Delphi cases, run over both HTTP and stdio), and a `TMCPOpenAIAgent` suite (8 Delphi cases driving the agent loop against an embedded fake LLM). See the [documentation](https://www.danieleteti.it/mcp-server-delphi/) for how to build and run them.
 
    ## Requirements
 

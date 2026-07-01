@@ -63,6 +63,17 @@ LServer.CertPassword := '...';
 LServer.Listen(APort);
 ```
 
+### stdio transport
+
+`MVCFramework.MCP.Stdio.pas` (`TMCPStdioTransport`) is the line-delimited JSON-RPC transport used when an MCP client (Claude Desktop, Claude Code, MCP Inspector) launches the server as a child process. `Run` blocks reading stdin until EOF, then exits — that is the correct lifecycle, not a bug.
+
+Two invariants keep it stable, and both must be preserved:
+
+- **stdout is UTF-8, LF-framed, and reserved for JSON-RPC only.** `Run` calls `SetTextCodePage(Input/Output, CP_UTF8)` at startup: without it, Windows text-mode `ReadLn`/`WriteLn` use the console/ANSI code page, so any non-ASCII byte (accented text, `€`, emoji, CJK) is emitted as e.g. Windows-1252 and the UTF-8 client rejects it with an invalid-continuation-byte error. All-ASCII payloads still work, so the defect is latent — regression-guarded by `test_utf8_roundtrip` in `tests/test_mcp_server_stdio.py`. All responses go through the private `WriteResponse`, which appends a single LF (`#10`) rather than `WriteLn`'s platform CRLF. Never `Write`/`WriteLn` to stdout from tool/provider code, and let no unhandled exception print there — a single stray byte breaks the client.
+- **Logs never touch stdout.** stdio-only servers include `MVCFramework.MCP.StdioOnly` (before any provider unit) to unconditionally disable the console logger; diagnostics go to stderr/file via LoggerPro. Dual-transport servers use `MVCFramework.MCP.TransportConf` instead, which leaves the console logger on for HTTP mode.
+
+stdio does not use the session manager — `Run` calls `HandleRequest` directly, so `Mcp-Session-Id` and the whole session/timeout machinery are HTTP-only.
+
 ### Test Application (`tests/testproject/`)
 
 Same wizard-style layout as `sample/` (BootConfigU + EngineConfigU + slim .dpr).

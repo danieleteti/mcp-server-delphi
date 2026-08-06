@@ -1,13 +1,21 @@
 @echo off
-rem ──────────────────────────────────────────────────────────────────────
+rem ----------------------------------------------------------------------
 rem Builds all three test projects (Win32 Debug):
-rem   - tests/testproject  - the test MCP server
+rem   - tests/testproject   - the test MCP server
 rem   - tests/clientproject - TMCPClient compliance test
 rem   - tests/agentproject  - TMCPOpenAIAgent compliance test (with fake LLM)
-rem ──────────────────────────────────────────────────────────────────────
+rem
+rem Set BDS to your RAD Studio install to override the default, e.g.
+rem   set BDS=C:\Program Files (x86)\Embarcadero\Studio\23.0
+rem ----------------------------------------------------------------------
 
 setlocal
-SET BDS=C:\Program Files (x86)\Embarcadero\Studio\37.0
+if not defined BDS SET "BDS=C:\Program Files (x86)\Embarcadero\Studio\37.0"
+if not exist "%BDS%\bin\dcc32.exe" (
+  echo ERROR: no Delphi compiler at "%BDS%\bin".
+  echo Set BDS to your RAD Studio install directory and retry.
+  exit /b 1
+)
 SET FrameworkDir=C:\Windows\Microsoft.NET\Framework
 SET FrameworkVersion=v4.0.30319
 SET PATH=%FrameworkDir%\%FrameworkVersion%;%BDS%\bin;%PATH%

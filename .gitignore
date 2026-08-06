@@ -84,8 +84,12 @@ modules/
 /tests/testproject/build_output.txt
 /tests/testproject/build.bat
 /**/__pycache__/
-/docs/superpowers/*
 *.res
+
+# Compiler output folders. Files already tracked here (loggerpro*.json,
+# .env.example, ...) stay tracked; this only stops new build artifacts
+# and runtime droppings (logs, certificates, www, templates) from showing up.
+**/bin/
 
 # Local environment files: may contain LLM API keys, DB passwords, etc.
 # Always tracked: bin/.env.example (template, no secrets).

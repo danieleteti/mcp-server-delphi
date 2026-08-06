@@ -1389,7 +1389,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd:
-        cmd = shlex.split(args.cmd, posix=(os.name != "nt"))
+        # Non-posix shlex keeps the quotes inside the token, so a quoted path
+        # would never match os.path.isfile below.
+        cmd = [tok.strip('"') for tok in
+               shlex.split(args.cmd, posix=(os.name != "nt"))]
     else:
         cmd = [DEFAULT_EXE, *DEFAULT_ARGS]
 

@@ -81,6 +81,44 @@
   The agent accumulates them and exposes the totals on TMCPAgentResult so
   callers can show running cost / watch for budget exhaustion.
 
+  -- Streaming --
+
+  Set Streaming := True and the agent asks the LLM for `stream: true`, then
+  consumes the Server-Sent Events channel instead of a single JSON body.
+  OnContentDelta fires for every text fragment as it arrives, so a UI can
+  paint the answer while the model is still writing it.
+
+  The loop itself is unchanged: TMCPSSEAccumulator reassembles the chunk
+  deltas and synthesises the very same non-streaming envelope Run already
+  knows how to read. The tricky part is not the text but the tool calls:
+
+    data: {"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id":"call_1","function":{"name":"get_customer",
+             "arguments":"{\"id\""}}]}}]}
+    data: {"choices":[{"delta":{"tool_calls":[
+            {"index":0,"function":{"arguments":":42}"}}]}}]}
+    data: [DONE]
+
+  `id` and `name` usually arrive only in the first fragment of a given
+  index, while `arguments` is a JSON string sliced across an arbitrary
+  number of chunks — cut anywhere, including in the middle of an escape
+  sequence. Fragments are therefore keyed by `index` (several tool calls
+  can interleave in the same turn) and concatenated verbatim; the result
+  is parsed only once the stream is complete.
+
+  Run stays synchronous: OnContentDelta is called on the calling thread,
+  so a VCL/FMX caller runs Run in a worker thread and marshals the deltas
+  itself.
+
+  -- Token usage while streaming --
+
+  A streamed response carries no `usage` object by default. When
+  StreamUsage is True (the default) the agent adds
+  `stream_options: {"include_usage": true}` to the request, and providers
+  that honour it emit a final chunk with an empty `choices` array plus the
+  usage totals. Providers that reject unknown fields need StreamUsage set
+  to False, at the cost of losing token accounting for that run.
+
   -- JSON ownership --
 
   Same convention as TMCPClient: methods that take a TJSONObject /
@@ -98,8 +136,10 @@ uses
   System.SysUtils,
   System.JSON,
   System.Generics.Collections,
+  System.Generics.Defaults,
   System.Net.HttpClient,
   System.Net.URLClient,
+  MVCFramework.SSEClient,
   MVCFramework.MCP.Client;
 
 type
@@ -110,6 +150,86 @@ type
     CompletionTokens: Integer;  // sum across all turns
     TotalTokens: Integer;       // = Prompt + Completion (set when Run exits)
     ToolCallCount: Integer;     // total MCP tool calls executed during the run
+  end;
+
+  // Fired for every text fragment streamed back by the LLM, in arrival
+  // order. Called on the thread running Run — a VCL/FMX caller marshals to
+  // the UI thread itself (TThread.Queue).
+  TMCPAgentDeltaProc = reference to procedure(const ADelta: string);
+
+  // Reassembles an OpenAI-compatible SSE stream into the non-streaming
+  // response envelope the agent loop already understands.
+  //
+  // Feed it raw bytes as they arrive (Feed), call Flush when the request
+  // ends, then BuildResponse. Public because this is the part worth testing
+  // on its own: every provider slices the stream differently, and a chunk
+  // boundary can fall anywhere — inside a UTF-8 sequence, inside a JSON
+  // string, between the two halves of a tool-call argument.
+  //
+  // The SSE grammar itself (fields, comments, CR/LF/CRLF framing, blank-line
+  // dispatch) is DMVCFramework's TSSEClientParser. What is added on top is
+  // the byte layer: chunks are decoded only up to their last complete line,
+  // because decoding a raw chunk would mangle any multi-byte character
+  // unlucky enough to straddle the boundary.
+  TMCPSSEAccumulator = class
+  private const
+    // A server that never sends a newline would otherwise grow FPending
+    // without bound. 8 MiB is far above any legitimate single SSE line.
+    MAX_PENDING_BYTES = 8 * 1024 * 1024;
+    // Kept only to build a useful message when the response turns out to
+    // be an HTTP error body rather than an event stream.
+    MAX_HEAD_BYTES = 2048;
+  private type
+    // One tool call under construction, keyed by its `index` in the stream.
+    TToolCallFragment = record
+      Index: Integer;
+      Id: string;
+      Name: string;
+      Arguments: string;   // concatenated verbatim, parsed only at the end
+    end;
+  private
+    FParser: TSSEClientParser;             // DMVCFramework's SSE grammar
+    FPending: TBytes;                      // bytes not yet closed by a LF
+    FHead: TBytes;                         // first bytes seen, for errors
+    FContent: TStringBuilder;
+    FFragments: TList<TToolCallFragment>;
+    FFinishReason: string;
+    FPromptTokens: Integer;
+    FCompletionTokens: Integer;
+    FHasUsage: Boolean;
+    FDone: Boolean;
+    FOnDelta: TMCPAgentDeltaProc;
+    function FragmentIndexOf(AIndex: Integer): Integer;
+    procedure ApplyChunk(AChunk: TJSONObject);
+    procedure ApplyDelta(ADelta: TJSONObject);
+    procedure ApplyToolCallDeltas(AToolCalls: TJSONArray);
+    procedure ApplyUsage(AUsage: TJSONObject);
+    procedure HandleEventData(const AData: string);
+  public
+    constructor Create(AOnDelta: TMCPAgentDeltaProc = nil);
+    destructor Destroy; override;
+
+    // Consume a chunk of the response body. Lines are decoded only once
+    // complete, so a multi-byte character split across two chunks survives.
+    procedure Feed(const ABytes: TBytes);
+    // Convenience for tests and for feeding an already-decoded body.
+    procedure FeedText(const AText: string);
+    // Call when the connection closes: emits a trailing line that was not
+    // terminated by a newline.
+    procedure Flush;
+
+    // The synthesised {choices:[{message:{...}}], usage:{...}} object.
+    // Ownership goes to the caller.
+    function BuildResponse: TJSONObject;
+    // First bytes of the body as text, for error reporting.
+    function HeadText: string;
+    // True when no chunk was ever parsed: no text, no tool fragment, no
+    // finish reason, no usage. Tells "the model said nothing" apart from
+    // "this body was never an event stream".
+    function IsEmpty: Boolean;
+
+    // True once `data: [DONE]` has been seen.
+    property Done: Boolean read FDone;
   end;
 
   TMCPOpenAIAgent = class
@@ -127,10 +247,23 @@ type
     FHTTP: THTTPClient;
     FMCPClient: TMCPClientBase;
     FOwnsMCPClient: Boolean;
+    FStreaming: Boolean;
+    FStreamUsage: Boolean;
+    FOnContentDelta: TMCPAgentDeltaProc;
+
+    // Request shape, shared by the buffered and the streaming paths.
+    function BuildRequestBody(AMessages, ATools: TJSONArray;
+      AStreaming: Boolean): TJSONObject;
+    function BuildHeaders(AStreaming: Boolean): TNetHeaders;
+    function BuildURL: string;
 
     // Builds the chat/completions payload, posts it, and returns the parsed
     // response. Ownership of the result is transferred to the caller.
     function CallLLM(AMessages, ATools: TJSONArray): TJSONObject;
+
+    // Same contract as CallLLM, but consumes an SSE stream and synthesises
+    // the equivalent buffered envelope, so the loop cannot tell them apart.
+    function CallLLMStreaming(AMessages, ATools: TJSONArray): TJSONObject;
 
     // Bridges a single MCP tool descriptor to OpenAI function-calling format.
     // Returns a fresh TJSONObject owned by the caller.
@@ -188,9 +321,441 @@ type
     // HTTP timeouts (ms). Defaults: response 300000 (5 min), connection 10000.
     property ResponseTimeoutMs: Integer read FResponseTimeoutMs write FResponseTimeoutMs;
     property ConnectionTimeoutMs: Integer read FConnectionTimeoutMs write FConnectionTimeoutMs;
+
+    // ---- Streaming ----------------------------------------------------------
+
+    // Ask the LLM for `stream: true` and consume the SSE channel. Defaults
+    // to False: the result of Run is identical either way, only the timing
+    // of OnContentDelta changes.
+    property Streaming: Boolean read FStreaming write FStreaming;
+
+    // Called for every text fragment while streaming, on the calling
+    // thread. Ignored when Streaming is False.
+    property OnContentDelta: TMCPAgentDeltaProc read FOnContentDelta write FOnContentDelta;
+
+    // Add `stream_options: {"include_usage": true}` so a streamed run still
+    // reports token usage. Defaults to True. Set to False for providers
+    // that reject the field (token counters then stay at zero).
+    property StreamUsage: Boolean read FStreamUsage write FStreamUsage;
   end;
 
 implementation
+
+// ──────────────────────────────────────────────────────────────────────────
+// TMCPSSEAccumulator
+//
+// Wire format (one event per blank-line-separated block, but OpenAI-compat
+// providers only ever use the `data:` field, one JSON object per line):
+//
+//   : a comment, sent by some providers as a keep-alive
+//   data: {"choices":[{"delta":{"content":"Hel"}}]}
+//   data: {"choices":[{"delta":{"content":"lo"}}]}
+//   data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+//   data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":20}}
+//   data: [DONE]
+//
+// Anything that is not a `data:` line is ignored, which covers comments,
+// blank separators and the `event:` / `id:` / `retry:` fields nobody sends
+// here.
+// ──────────────────────────────────────────────────────────────────────────
+
+constructor TMCPSSEAccumulator.Create(AOnDelta: TMCPAgentDeltaProc);
+begin
+  inherited Create;
+  FContent   := TStringBuilder.Create;
+  FFragments := TList<TToolCallFragment>.Create;
+  FOnDelta   := AOnDelta;
+  SetLength(FPending, 0);
+  SetLength(FHead, 0);
+
+  FParser := TSSEClientParser.Create;
+  FParser.OnEvent :=
+    procedure(const AId, AEvent, AData: string)
+    begin
+      // id/event are unused here: OpenAI-compatible providers only ever
+      // send `data:` payloads.
+      HandleEventData(AData);
+    end;
+end;
+
+destructor TMCPSSEAccumulator.Destroy;
+begin
+  FParser.Free;
+  FFragments.Free;
+  FContent.Free;
+  inherited;
+end;
+
+procedure TMCPSSEAccumulator.Feed(const ABytes: TBytes);
+var
+  LOld, I, LLastLF, LHeadRoom: Integer;
+  LComplete: TBytes;
+begin
+  if Length(ABytes) = 0 then
+    Exit;
+
+  // Keep the opening bytes around: when the server answers with an HTTP
+  // error the body is JSON, not an event stream, and this is all we have
+  // left to put in the exception message.
+  LHeadRoom := MAX_HEAD_BYTES - Length(FHead);
+  if LHeadRoom > 0 then
+  begin
+    if LHeadRoom > Length(ABytes) then
+      LHeadRoom := Length(ABytes);
+    LOld := Length(FHead);
+    SetLength(FHead, LOld + LHeadRoom);
+    Move(ABytes[0], FHead[LOld], LHeadRoom);
+  end;
+
+  LOld := Length(FPending);
+  if LOld + Length(ABytes) > MAX_PENDING_BYTES then
+    raise Exception.Create(
+      'SSE stream: no line terminator within ' +
+      IntToStr(MAX_PENDING_BYTES) + ' bytes, aborting');
+  SetLength(FPending, LOld + Length(ABytes));
+  Move(ABytes[0], FPending[LOld], Length(ABytes));
+
+  // Hand the parser everything up to the last complete line and keep the
+  // rest for the next chunk. A line boundary is always a character
+  // boundary, so decoding here can never cut a multi-byte sequence in half.
+  LLastLF := -1;
+  for I := Length(FPending) - 1 downto 0 do
+    if FPending[I] = 10 then
+    begin
+      LLastLF := I;
+      Break;
+    end;
+
+  if LLastLF >= 0 then
+  begin
+    LComplete := Copy(FPending, 0, LLastLF + 1);
+    FPending := Copy(FPending, LLastLF + 1, Length(FPending) - LLastLF - 1);
+    FParser.Feed(TEncoding.UTF8.GetString(LComplete));
+  end;
+end;
+
+procedure TMCPSSEAccumulator.FeedText(const AText: string);
+begin
+  Feed(TEncoding.UTF8.GetBytes(AText));
+end;
+
+procedure TMCPSSEAccumulator.Flush;
+var
+  LTail: string;
+begin
+  // Two loose ends when the connection closes: a last line that never got
+  // its newline, and a last event that never got its blank line. Feeding a
+  // final LF pair closes both — the parser dispatches whatever it holds.
+  if Length(FPending) > 0 then
+  begin
+    LTail := TEncoding.UTF8.GetString(FPending);
+    SetLength(FPending, 0);
+    FParser.Feed(LTail + #10);
+  end;
+  FParser.Feed(#10);
+end;
+
+procedure TMCPSSEAccumulator.HandleEventData(const AData: string);
+var
+  LPayload: string;
+  LValue: TJSONValue;
+begin
+  LPayload := AData.Trim;
+  if LPayload = '' then
+    Exit;
+  if LPayload = '[DONE]' then
+  begin
+    FDone := True;
+    Exit;
+  end;
+
+  LValue := TJSONObject.ParseJSONValue(LPayload);
+  if not Assigned(LValue) then
+    Exit;   // a truncated or malformed chunk must not kill the whole run
+  try
+    if LValue is TJSONObject then
+      ApplyChunk(TJSONObject(LValue));
+  finally
+    LValue.Free;
+  end;
+end;
+
+procedure TMCPSSEAccumulator.ApplyChunk(AChunk: TJSONObject);
+var
+  LChoices: TJSONArray;
+  LChoice: TJSONObject;
+  LValue, LFinishVal: TJSONValue;
+begin
+  // The usage-only chunk carries an empty `choices`, so read usage first
+  // and never assume a choice is there.
+  LValue := AChunk.FindValue('usage');
+  if Assigned(LValue) and (LValue is TJSONObject) then
+    ApplyUsage(TJSONObject(LValue));
+
+  LValue := AChunk.FindValue('choices');
+  if not (LValue is TJSONArray) then
+    Exit;
+  LChoices := TJSONArray(LValue);
+  if LChoices.Count = 0 then
+    Exit;
+  if not (LChoices.Items[0] is TJSONObject) then
+    Exit;
+  LChoice := TJSONObject(LChoices.Items[0]);
+
+  LFinishVal := LChoice.FindValue('finish_reason');
+  if Assigned(LFinishVal) and (LFinishVal is TJSONString) then
+    FFinishReason := TJSONString(LFinishVal).Value;
+
+  LValue := LChoice.FindValue('delta');
+  if Assigned(LValue) and (LValue is TJSONObject) then
+    ApplyDelta(TJSONObject(LValue));
+end;
+
+procedure TMCPSSEAccumulator.ApplyDelta(ADelta: TJSONObject);
+var
+  LValue: TJSONValue;
+  LText: string;
+begin
+  // `content` is null in the chunks that carry tool calls.
+  LValue := ADelta.FindValue('content');
+  if Assigned(LValue) and (LValue is TJSONString) then
+  begin
+    LText := TJSONString(LValue).Value;
+    if LText <> '' then
+    begin
+      FContent.Append(LText);
+      if Assigned(FOnDelta) then
+        FOnDelta(LText);
+    end;
+  end;
+
+  LValue := ADelta.FindValue('tool_calls');
+  if Assigned(LValue) and (LValue is TJSONArray) then
+    ApplyToolCallDeltas(TJSONArray(LValue));
+end;
+
+function TMCPSSEAccumulator.FragmentIndexOf(AIndex: Integer): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to FFragments.Count - 1 do
+    if FFragments[I].Index = AIndex then
+      Exit(I);
+  Result := -1;
+end;
+
+procedure TMCPSSEAccumulator.ApplyToolCallDeltas(AToolCalls: TJSONArray);
+var
+  I, LPos, LIndex: Integer;
+  LItem, LFunc: TJSONObject;
+  LValue: TJSONValue;
+  LFrag: TToolCallFragment;
+begin
+  for I := 0 to AToolCalls.Count - 1 do
+  begin
+    if not (AToolCalls.Items[I] is TJSONObject) then
+      Continue;
+    LItem := TJSONObject(AToolCalls.Items[I]);
+
+    // `index` identifies the tool call across chunks. Providers that emit a
+    // single tool call sometimes omit it — treat that as index 0.
+    LIndex := 0;
+    LValue := LItem.FindValue('index');
+    if Assigned(LValue) and (LValue is TJSONNumber) then
+      LIndex := TJSONNumber(LValue).AsInt;
+
+    LPos := FragmentIndexOf(LIndex);
+    if LPos < 0 then
+    begin
+      LFrag.Index     := LIndex;
+      LFrag.Id        := '';
+      LFrag.Name      := '';
+      LFrag.Arguments := '';
+      FFragments.Add(LFrag);
+      LPos := FFragments.Count - 1;
+    end;
+    LFrag := FFragments[LPos];
+
+    // id and name normally arrive once, in the first fragment.
+    LValue := LItem.FindValue('id');
+    if Assigned(LValue) and (LValue is TJSONString)
+       and (TJSONString(LValue).Value <> '') then
+      LFrag.Id := TJSONString(LValue).Value;
+
+    LValue := LItem.FindValue('function');
+    if Assigned(LValue) and (LValue is TJSONObject) then
+    begin
+      LFunc := TJSONObject(LValue);
+
+      LValue := LFunc.FindValue('name');
+      if Assigned(LValue) and (LValue is TJSONString)
+         and (TJSONString(LValue).Value <> '') then
+        LFrag.Name := TJSONString(LValue).Value;
+
+      // The whole point of the exercise: `arguments` is a JSON string cut
+      // at arbitrary offsets. Concatenate the pieces verbatim and parse
+      // once, at dispatch time.
+      LValue := LFunc.FindValue('arguments');
+      if Assigned(LValue) and (LValue is TJSONString) then
+        LFrag.Arguments := LFrag.Arguments + TJSONString(LValue).Value;
+    end;
+
+    FFragments[LPos] := LFrag;
+  end;
+end;
+
+procedure TMCPSSEAccumulator.ApplyUsage(AUsage: TJSONObject);
+var
+  LValue: TJSONValue;
+begin
+  LValue := AUsage.FindValue('prompt_tokens');
+  if Assigned(LValue) and (LValue is TJSONNumber) then
+  begin
+    FPromptTokens := TJSONNumber(LValue).AsInt;
+    FHasUsage := True;
+  end;
+  LValue := AUsage.FindValue('completion_tokens');
+  if Assigned(LValue) and (LValue is TJSONNumber) then
+  begin
+    FCompletionTokens := TJSONNumber(LValue).AsInt;
+    FHasUsage := True;
+  end;
+end;
+
+function TMCPSSEAccumulator.BuildResponse: TJSONObject;
+var
+  I: Integer;
+  LChoices, LToolCalls: TJSONArray;
+  LChoice, LMessage, LToolCall, LFunc, LUsage: TJSONObject;
+  LFinish: string;
+begin
+  Result := TJSONObject.Create;
+
+  LChoices := TJSONArray.Create;
+  Result.AddPair('choices', LChoices);
+
+  LChoice := TJSONObject.Create;
+  LChoices.AddElement(LChoice);
+  LChoice.AddPair('index', TJSONNumber.Create(0));
+
+  LMessage := TJSONObject.Create;
+  LChoice.AddPair('message', LMessage);
+  LMessage.AddPair('role', 'assistant');
+
+  // Mirror the buffered shape exactly: content is null when the turn only
+  // asked for tools, and the assistant message is replayed to the LLM as
+  // history on the next turn.
+  if FContent.Length > 0 then
+    LMessage.AddPair('content', FContent.ToString)
+  else
+    LMessage.AddPair('content', TJSONNull.Create);
+
+  if FFragments.Count > 0 then
+  begin
+    // Sort by index: chunks may interleave, the tool_calls array may not.
+    FFragments.Sort(TComparer<TToolCallFragment>.Construct(
+      function(const A, B: TToolCallFragment): Integer
+      begin
+        Result := A.Index - B.Index;
+      end));
+
+    LToolCalls := TJSONArray.Create;
+    LMessage.AddPair('tool_calls', LToolCalls);
+    for I := 0 to FFragments.Count - 1 do
+    begin
+      LToolCall := TJSONObject.Create;
+      LToolCalls.AddElement(LToolCall);
+      LToolCall.AddPair('id', FFragments[I].Id);
+      LToolCall.AddPair('type', 'function');
+
+      LFunc := TJSONObject.Create;
+      LToolCall.AddPair('function', LFunc);
+      LFunc.AddPair('name', FFragments[I].Name);
+      LFunc.AddPair('arguments', FFragments[I].Arguments);
+    end;
+  end;
+
+  // finish_reason is what the loop branches on, so never leave it empty:
+  // tool fragments mean another turn, anything else means we are done.
+  LFinish := FFinishReason;
+  if LFinish = '' then
+  begin
+    if FFragments.Count > 0 then
+      LFinish := 'tool_calls'
+    else
+      LFinish := 'stop';
+  end;
+  LChoice.AddPair('finish_reason', LFinish);
+
+  if FHasUsage then
+  begin
+    LUsage := TJSONObject.Create;
+    Result.AddPair('usage', LUsage);
+    LUsage.AddPair('prompt_tokens',     TJSONNumber.Create(FPromptTokens));
+    LUsage.AddPair('completion_tokens', TJSONNumber.Create(FCompletionTokens));
+  end;
+end;
+
+function TMCPSSEAccumulator.HeadText: string;
+begin
+  Result := TEncoding.UTF8.GetString(FHead);
+end;
+
+function TMCPSSEAccumulator.IsEmpty: Boolean;
+begin
+  Result := (FContent.Length = 0) and (FFragments.Count = 0)
+            and (FFinishReason = '') and (not FHasUsage);
+end;
+
+// ──────────────────────────────────────────────────────────────────────────
+// TSSEResponseStream — the adapter between THTTPClient and the accumulator.
+//
+// THTTPClient writes the response body into the stream we hand it, in
+// whatever pieces come off the socket. Overriding Write is therefore the
+// whole streaming mechanism: no polling, no extra thread.
+// ──────────────────────────────────────────────────────────────────────────
+
+type
+  TSSEResponseStream = class(TStream)
+  private
+    FAccumulator: TMCPSSEAccumulator;
+    FPosition: Int64;
+  public
+    constructor Create(AAccumulator: TMCPSSEAccumulator);
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+  end;
+
+constructor TSSEResponseStream.Create(AAccumulator: TMCPSSEAccumulator);
+begin
+  inherited Create;
+  FAccumulator := AAccumulator;
+end;
+
+function TSSEResponseStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;   // write-only sink
+end;
+
+function TSSEResponseStream.Write(const Buffer; Count: Longint): Longint;
+var
+  LChunk: TBytes;
+begin
+  Result := Count;
+  if Count <= 0 then
+    Exit;
+  SetLength(LChunk, Count);
+  Move(Buffer, LChunk[0], Count);
+  FAccumulator.Feed(LChunk);
+  Inc(FPosition, Count);
+end;
+
+function TSSEResponseStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  // THTTPClient only ever queries the position of the response stream.
+  Result := FPosition;
+end;
 
 // ──────────────────────────────────────────────────────────────────────────
 // Construction / destruction
@@ -212,6 +777,9 @@ begin
   FConnectionTimeoutMs := 10000;
   FMCPClient           := nil;
   FOwnsMCPClient       := False;
+  FStreaming           := False;
+  FStreamUsage         := True;
+  FOnContentDelta      := nil;
 
   FHTTP := THTTPClient.Create;
   FHTTP.ResponseTimeout   := FResponseTimeoutMs;
@@ -296,44 +864,68 @@ end;
 // emitted only when non-empty (OpenRouter analytics).
 // ──────────────────────────────────────────────────────────────────────────
 
+function TMCPOpenAIAgent.BuildRequestBody(AMessages, ATools: TJSONArray;
+  AStreaming: Boolean): TJSONObject;
+var
+  LStreamOptions: TJSONObject;
+begin
+  // We clone messages and tools: AddPair transfers ownership to the body,
+  // and freeing the body at the end would otherwise destroy the caller's
+  // structures. Cloning keeps the ownership story trivial.
+  Result := TJSONObject.Create;
+  Result.AddPair('model',    FModel);
+  Result.AddPair('messages', AMessages.Clone as TJSONArray);
+  if Assigned(ATools) and (ATools.Count > 0) then
+    Result.AddPair('tools', ATools.Clone as TJSONArray);
+
+  if AStreaming then
+  begin
+    Result.AddPair('stream', TJSONBool.Create(True));
+    if FStreamUsage then
+    begin
+      LStreamOptions := TJSONObject.Create;
+      LStreamOptions.AddPair('include_usage', TJSONBool.Create(True));
+      Result.AddPair('stream_options', LStreamOptions);
+    end;
+  end;
+end;
+
+function TMCPOpenAIAgent.BuildHeaders(AStreaming: Boolean): TNetHeaders;
+begin
+  Result := [
+    TNameValuePair.Create('Authorization', 'Bearer ' + FAPIKey),
+    TNameValuePair.Create('Content-Type',  'application/json')
+  ];
+  if AStreaming then
+    Result := Result + [TNameValuePair.Create('Accept', 'text/event-stream')];
+  if FHTTPReferer <> '' then
+    Result := Result + [TNameValuePair.Create('HTTP-Referer', FHTTPReferer)];
+  if FXTitle <> '' then
+    Result := Result + [TNameValuePair.Create('X-Title', FXTitle)];
+end;
+
+function TMCPOpenAIAgent.BuildURL: string;
+begin
+  // Tolerate a trailing slash in the base URL — some reverse proxies reject
+  // double slashes.
+  Result := FBaseURL;
+  if (Result <> '') and (Result[Length(Result)] = '/') then
+    SetLength(Result, Length(Result) - 1);
+  Result := Result + '/chat/completions';
+end;
+
 function TMCPOpenAIAgent.CallLLM(AMessages, ATools: TJSONArray): TJSONObject;
 var
   LBody: TJSONObject;
   LStream: TStringStream;
   LResp: IHTTPResponse;
-  LHeaders: TNetHeaders;
   LValue: TJSONValue;
-  LURL: string;
 begin
-  // We clone messages and tools: AddPair transfers ownership to the body,
-  // and freeing LBody at the end would otherwise destroy the caller's
-  // structures. Cloning keeps the ownership story trivial.
-  LBody := TJSONObject.Create;
+  LBody := BuildRequestBody(AMessages, ATools, False);
   try
-    LBody.AddPair('model',    FModel);
-    LBody.AddPair('messages', AMessages.Clone as TJSONArray);
-    if Assigned(ATools) and (ATools.Count > 0) then
-      LBody.AddPair('tools', ATools.Clone as TJSONArray);
-
-    LHeaders := [
-      TNameValuePair.Create('Authorization', 'Bearer ' + FAPIKey),
-      TNameValuePair.Create('Content-Type',  'application/json')
-    ];
-    if FHTTPReferer <> '' then
-      LHeaders := LHeaders + [TNameValuePair.Create('HTTP-Referer', FHTTPReferer)];
-    if FXTitle <> '' then
-      LHeaders := LHeaders + [TNameValuePair.Create('X-Title', FXTitle)];
-
     LStream := TStringStream.Create(LBody.ToJSON, TEncoding.UTF8);
     try
-      // Build the full URL, tolerating a trailing slash in the base URL —
-      // some reverse proxies reject double slashes.
-      LURL := FBaseURL;
-      if (LURL <> '') and (LURL[Length(LURL)] = '/') then
-        SetLength(LURL, Length(LURL) - 1);
-      LURL := LURL + '/chat/completions';
-
-      LResp := FHTTP.Post(LURL, LStream, nil, LHeaders);
+      LResp := FHTTP.Post(BuildURL, LStream, nil, BuildHeaders(False));
     finally
       LStream.Free;
     end;
@@ -353,6 +945,65 @@ begin
     raise Exception.Create('LLM returned non-JSON response');
   end;
   Result := TJSONObject(LValue);
+end;
+
+// ──────────────────────────────────────────────────────────────────────────
+// POST /chat/completions with stream: true
+//
+// The response body is consumed as it arrives by TSSEResponseStream, which
+// forwards every chunk to the accumulator. What comes back out is the same
+// envelope CallLLM returns, so Run treats both identically.
+// ──────────────────────────────────────────────────────────────────────────
+
+function TMCPOpenAIAgent.CallLLMStreaming(AMessages, ATools: TJSONArray): TJSONObject;
+var
+  LBody: TJSONObject;
+  LSource: TStringStream;
+  LSink: TSSEResponseStream;
+  LAccumulator: TMCPSSEAccumulator;
+  LResp: IHTTPResponse;
+begin
+  LAccumulator := TMCPSSEAccumulator.Create(FOnContentDelta);
+  try
+    LBody := BuildRequestBody(AMessages, ATools, True);
+    try
+      LSource := TStringStream.Create(LBody.ToJSON, TEncoding.UTF8);
+      try
+        LSink := TSSEResponseStream.Create(LAccumulator);
+        try
+          LResp := FHTTP.Post(BuildURL, LSource, LSink, BuildHeaders(True));
+        finally
+          LSink.Free;
+        end;
+      finally
+        LSource.Free;
+      end;
+    finally
+      LBody.Free;
+    end;
+
+    // The body went into our sink, so ContentAsString is empty here: an
+    // error response is JSON rather than SSE, and the accumulator kept its
+    // opening bytes precisely for this message.
+    if (LResp.StatusCode < 200) or (LResp.StatusCode >= 300) then
+      raise Exception.CreateFmt('LLM HTTP %d: %s',
+        [LResp.StatusCode, Copy(LAccumulator.HeadText, 1, 800)]);
+
+    LAccumulator.Flush;
+
+    // Nothing parsed and no [DONE] means we were not talking to an event
+    // stream at all (a proxy that buffered the body into plain JSON, a
+    // provider that ignored `stream`). Fail loudly: BuildResponse would
+    // otherwise hand the loop an empty answer that looks like a perfectly
+    // well-behaved "stop", and Run would return "" as the final content.
+    if (not LAccumulator.Done) and LAccumulator.IsEmpty then
+      raise Exception.Create('LLM streaming response was not an event stream: ' +
+        Copy(LAccumulator.HeadText, 1, 800));
+
+    Result := LAccumulator.BuildResponse;
+  finally
+    LAccumulator.Free;
+  end;
 end;
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -507,7 +1158,12 @@ begin
           // 4. Loop up to MaxTurns.
           for LTurn := 1 to FMaxTurns do
           begin
-            LResp := CallLLM(LWorking, LTools);
+            // Both paths return the same envelope shape, so everything
+            // below is blind to which transport produced it.
+            if FStreaming then
+              LResp := CallLLMStreaming(LWorking, LTools)
+            else
+              LResp := CallLLM(LWorking, LTools);
             try
               // 4a. Token accounting (best-effort — `usage` is optional).
               LUsageVal := LResp.FindValue('usage');

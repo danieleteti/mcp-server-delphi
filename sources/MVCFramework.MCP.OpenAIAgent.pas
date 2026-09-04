@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server Library for DMVCFramework
 //
@@ -156,6 +156,10 @@ type
   // order. Called on the thread running Run — a VCL/FMX caller marshals to
   // the UI thread itself (TThread.Queue).
   TMCPAgentDeltaProc = reference to procedure(const ADelta: string);
+  // Signals the end of a turn that will be followed by another one.
+  // AContent is the text that turn produced, possibly empty.
+  TMCPAgentTurnProc = reference to procedure(const AContent: string);
+
 
   // Reassembles an OpenAI-compatible SSE stream into the non-streaming
   // response envelope the agent loop already understands.
@@ -250,6 +254,7 @@ type
     FStreaming: Boolean;
     FStreamUsage: Boolean;
     FOnContentDelta: TMCPAgentDeltaProc;
+    FOnTurnBoundary: TMCPAgentTurnProc;
 
     // Request shape, shared by the buffered and the streaming paths.
     function BuildRequestBody(AMessages, ATools: TJSONArray;
@@ -332,6 +337,19 @@ type
     // Called for every text fragment while streaming, on the calling
     // thread. Ignored when Streaming is False.
     property OnContentDelta: TMCPAgentDeltaProc read FOnContentDelta write FOnContentDelta;
+
+    // Fired when a turn ends but the run continues: the model asked for tools
+    // and will be called again once they have run. AContent is whatever text
+    // that turn produced - often empty, sometimes a "let me check that"
+    // preamble. Fires on the calling thread, in both the streamed and the
+    // buffered path, and never for the final turn (its text is the result of
+    // Run).
+    //
+    // A UI that accumulates OnContentDelta needs this: the fragments of two
+    // consecutive turns are separate documents, and concatenating them blind
+    // glues the first word of the new turn onto the last word of the old one
+    // - a heading that opens the next turn stops being a heading.
+    property OnTurnBoundary: TMCPAgentTurnProc read FOnTurnBoundary write FOnTurnBoundary;
 
     // Add `stream_options: {"include_usage": true}` so a streamed run still
     // reports token usage. Defaults to True. Set to False for providers
@@ -780,6 +798,7 @@ begin
   FStreaming           := False;
   FStreamUsage         := True;
   FOnContentDelta      := nil;
+  FOnTurnBoundary      := nil;
 
   FHTTP := THTTPClient.Create;
   FHTTP.ResponseTimeout   := FResponseTimeoutMs;
@@ -1098,6 +1117,7 @@ var
   LChoices, LToolCalls: TJSONArray;
   LFinishReason: string;
   LContentVal: TJSONValue;
+  LTurnContent: string;
   LUsageVal: TJSONValue;
   LPrompt, LCompletion: Integer;
 begin
@@ -1216,6 +1236,18 @@ begin
               // the next turn.
               LAssistMsg := LMessage.Clone as TJSONObject;
               LWorking.AddElement(LAssistMsg);
+
+              // This turn is closed and another one follows: tell the caller,
+              // so a UI streaming the text knows the next fragments start a
+              // new document rather than continuing this sentence.
+              if Assigned(FOnTurnBoundary) then
+              begin
+                LTurnContent := '';
+                LContentVal := LMessage.FindValue('content');
+                if Assigned(LContentVal) and (LContentVal is TJSONString) then
+                  LTurnContent := TJSONString(LContentVal).Value;
+                FOnTurnBoundary(LTurnContent);
+              end;
 
               DispatchToolCalls(LToolCalls, LMCP, LWorking, Result);
             finally

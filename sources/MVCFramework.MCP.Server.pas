@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server Library for DMVCFramework
 //
@@ -227,6 +227,19 @@ implementation
 uses
   MVCFramework.Logger;
 
+// A tool name outside ^[a-zA-Z0-9_-]{1,128}$ is legal MCP but is rejected by
+// every OpenAI-compatible provider, and they reject the whole tools payload
+// rather than the single tool - so one bad name silences the entire server for
+// any LLM client. The name is the developer's to choose, so this warns
+// instead of rewriting it.
+procedure WarnOnProviderHostileToolName(const AName: string);
+begin
+  if not MCPIsValidToolName(AName) then
+    LogW(Format('MCP: tool name "%s" does not match ^[a-zA-Z0-9_-]{1,128}$ - ' +
+      'OpenAI/Anthropic-compatible clients will reject the whole tools/list payload. ' +
+      'Suggested name: "%s"', [AName, MCPSanitizeToolName(AName)]));
+end;
+
 { TMCPToolInfo }
 
 destructor TMCPToolInfo.Destroy;
@@ -326,6 +339,7 @@ begin
     LToolInfo := TMCPToolInfo.Create;
     try
       LToolInfo.Name := LDef.Name;
+      WarnOnProviderHostileToolName(LToolInfo.Name);
       LToolInfo.Description := LDef.Description;
       LToolInfo.ProviderClass := nil;
       LToolInfo.RttiMethod := nil;
@@ -438,6 +452,7 @@ begin
     LToolInfo := TMCPToolInfo.Create;
     try
       LToolInfo.Name := LToolAttr.Name;
+      WarnOnProviderHostileToolName(LToolInfo.Name);
       LToolInfo.Description := LToolAttr.Description;
       LToolInfo.ProviderClass := AProviderClass;
       LToolInfo.RttiMethod := LMethod;

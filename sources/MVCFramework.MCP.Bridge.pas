@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server Library for DMVCFramework
 //
@@ -106,7 +106,8 @@ implementation
 
 uses
   System.IOUtils, System.Rtti, System.NetEncoding,
-  System.Net.URLClient, System.NetConsts, MVCFramework.Logger;
+  System.Net.URLClient, System.NetConsts, MVCFramework.Logger,
+  MVCFramework.MCP.Types;
 
 { TMCPBridgeRouteInfo }
 
@@ -180,7 +181,12 @@ begin
       else
         LResult.Append(LowerCase(LPart));
     end;
-    Result := LResult.ToString;
+    // A route segment can legally contain characters a function-calling
+    // provider rejects - "/system/describeserver.info" is a DMVCFramework
+    // built-in and its dot alone makes OpenAI, Anthropic, Azure and Bedrock
+    // refuse the entire tools payload. The name is derived, not chosen by the
+    // developer, so coercing it is the right call.
+    Result := MCPSanitizeToolName(LResult.ToString);
   finally
     LResult.Free;
   end;

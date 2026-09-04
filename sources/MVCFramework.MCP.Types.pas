@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server Library for DMVCFramework
 //
@@ -36,6 +36,24 @@ const
   MCP_SESSION_HEADER = 'Mcp-Session-Id';
   MCP_ERR_SESSION = -32001;
 
+// Tool-name rules imposed by OpenAI-compatible function calling.
+//
+// The MCP specification puts no constraint on a tool name, but every provider
+// that maps MCP tools onto function calling does: OpenAI, Anthropic, Azure and
+// Bedrock all reject a request whose tool names do not match
+// ^[a-zA-Z0-9_-]{1,128}$, and they reject the whole request, not the offending
+// tool. A server whose names carry a dot or a space therefore works against a
+// hand-written client and fails against every real model, which is a painful
+// way to find out. MCPIsValidToolName answers the question; MCPSanitizeToolName
+// coerces a generated name into the accepted alphabet.
+function MCPIsValidToolName(const AName: string): Boolean;
+
+// Maps every character outside [A-Za-z0-9_-] to '_' and truncates to the
+// 128-character limit. Intended for names the framework derives from
+// something else (a route path, a class name), never to silently rewrite a
+// name the developer wrote by hand.
+function MCPSanitizeToolName(const AName: string): string;
+
 type
   TMCPCapabilities = record
     SupportsTools: Boolean;
@@ -57,6 +75,41 @@ type
   end;
 
 implementation
+
+uses
+  System.SysUtils;
+
+const
+  MCP_TOOL_NAME_MAX_LEN = 128;
+
+function IsToolNameChar(const AChar: Char): Boolean;
+begin
+  Result := CharInSet(AChar, ['A' .. 'Z', 'a' .. 'z', '0' .. '9', '_', '-']);
+end;
+
+function MCPIsValidToolName(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  if (AName = '') or (Length(AName) > MCP_TOOL_NAME_MAX_LEN) then
+    Exit(False);
+  for I := 1 to Length(AName) do
+    if not IsToolNameChar(AName[I]) then
+      Exit(False);
+  Result := True;
+end;
+
+function MCPSanitizeToolName(const AName: string): string;
+var
+  I: Integer;
+begin
+  Result := AName;
+  for I := 1 to Length(Result) do
+    if not IsToolNameChar(Result[I]) then
+      Result[I] := '_';
+  if Length(Result) > MCP_TOOL_NAME_MAX_LEN then
+    SetLength(Result, MCP_TOOL_NAME_MAX_LEN);
+end;
 
 { TMCPCapabilities }
 

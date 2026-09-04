@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server Library for DMVCFramework
 //
@@ -29,7 +29,40 @@ interface
 uses
   JsonDataObjects, System.SysUtils, System.TypInfo, System.Classes, Data.DB;
 
+{$SCOPEDENUMS ON}
+
 type
+  // Wire format produced by TMCPToolResult.FromDataSet.
+  //
+  //   Json  - one JSON object per row. Self-describing and trivially parsed,
+  //           but every field name is repeated on every row.
+  //   Table - a pipe-separated table with the header written once:
+  //
+  //             id | code | description | price
+  //             1 | EL-001 | Laptop | 899.00
+  //             2 | EL-002 | Monitor | 349.00
+  //
+  // Both carry the same information. Table is markedly cheaper in tokens on
+  // wide or long result sets, and a tool result is re-sent to the model on
+  // every subsequent turn of the run, so the saving is paid back once per
+  // turn. Json remains the default: it is what existing tools already emit.
+  //
+  // Table formatting rules: NULL renders as an empty cell, floats and dates
+  // use invariant formats (dot decimal separator, ISO-8601 dates) so the
+  // model never has to guess a locale, embedded line breaks are folded to a
+  // single space to keep one record per line, and binary blobs render as
+  // <blob N bytes> rather than being dumped inline.
+  TMCPDataSetFormat = (Json, Table);
+
+{$SCOPEDENUMS OFF}
+
+// Renders a dataset as the pipe table described above. Exposed because a tool
+// that builds a multi-part result with AddText needs the table as a string,
+// not as a TMCPToolResult of its own.
+function MCPDataSetToTable(ADataSet: TDataSet): string;
+
+type
+
   // Tool result record. Uses an interface-counted holder internally so that
   // record copies don't cause double-free or leaks. The TJDOJsonArray is freed
   // automatically when the last copy of the record goes out of scope, unless
@@ -53,6 +86,7 @@ type
   //   FromCollection(AList)                 -> TextContent with JSON array from TObjectList/IInterface list
   //   FromRecord<T>(ARecord)                -> TextContent with JSON-serialized record
   //   FromDataSet(ADataSet)                 -> TextContent with JSON array from TDataSet
+  //   FromDataSet(ADataSet, AFormat)        -> same, as JSON rows or as a token-cheap pipe table
   //   FromValue(AInteger/ADouble/ABoolean)  -> TextContent with value as string
   //   FromStream(AStream, AMimeType)        -> ImageContent with base64-encoded stream
   //
@@ -114,7 +148,14 @@ type
     // Serializes a record to JSON text via DMVCFramework serializer
     class function FromRecord(const ARecord: Pointer; ARecordTypeInfo: PTypeInfo): TMCPToolResult; static;
     // Serializes a TDataSet to JSON array text via DMVCFramework (caller retains ownership)
-    class function FromDataSet(ADataSet: TDataSet): TMCPToolResult; static;
+    class function FromDataSet(ADataSet: TDataSet): TMCPToolResult; overload; static;
+    // Same, choosing the wire format: TMCPDataSetFormat.Table writes the field
+    // names once as a header instead of repeating them on every row, which
+    // costs the model far fewer tokens on wide result sets.
+    // The dataset is walked from the first record and left on the record it
+    // was on; caller retains ownership.
+    class function FromDataSet(ADataSet: TDataSet;
+      const AFormat: TMCPDataSetFormat): TMCPToolResult; overload; static;
 
     // --- Convenience: scalar values -> TextContent ---
     class function FromValue(const AValue: Integer): TMCPToolResult; overload; static;
@@ -363,6 +404,118 @@ begin
     Result := TMCPToolResult.Text(LSerializer.SerializeDataSet(ADataSet));
   finally
     LSerializer.Free;
+  end;
+end;
+
+// Renders one field of the current record for the Table format. Invariant
+// formats only: the model must never have to guess whether "1.234" is one
+// thousand or one point something.
+function FieldToTableCell(AField: TField): string;
+begin
+  if AField.IsNull then
+    Exit('');
+
+  case AField.DataType of
+    ftBoolean:
+      if AField.AsBoolean then
+        Exit('true')
+      else
+        Exit('false');
+
+    ftFloat, ftCurrency, ftBCD, ftFMTBcd, ftSingle, ftExtended:
+      Exit(FloatToStr(AField.AsFloat, TFormatSettings.Invariant));
+
+    ftDate:
+      Exit(FormatDateTime('yyyy-mm-dd', AField.AsDateTime));
+    ftTime:
+      Exit(FormatDateTime('hh:nn:ss', AField.AsDateTime));
+    ftDateTime, ftTimeStamp:
+      Exit(FormatDateTime('yyyy-mm-dd hh:nn:ss', AField.AsDateTime));
+
+    ftBlob, ftGraphic, ftVarBytes, ftBytes, ftOraBlob:
+      Exit(Format('<blob %d bytes>', [Length(AField.AsBytes)]));
+  end;
+
+  // Everything else goes out as text, folded onto a single line so that one
+  // record stays one row.
+  Result := AField.AsString
+    .Replace(#13#10, ' ', [rfReplaceAll])
+    .Replace(#13, ' ', [rfReplaceAll])
+    .Replace(#10, ' ', [rfReplaceAll]);
+end;
+
+// Pipe-separated table: header once, then one line per record. An empty
+// dataset still emits the header, so the model learns the shape of the
+// result even when there is no data.
+function MCPDataSetToTable(ADataSet: TDataSet): string;
+const
+  SEP = ' | ';
+var
+  LBuilder: TStringBuilder;
+  LBookmark: TBookmark;
+  LUseBookmark: Boolean;
+  I: Integer;
+begin
+  if (ADataSet = nil) or (ADataSet.FieldCount = 0) then
+    Exit('');
+
+  LBuilder := TStringBuilder.Create;
+  try
+    for I := 0 to ADataSet.FieldCount - 1 do
+    begin
+      if I > 0 then
+        LBuilder.Append(SEP);
+      LBuilder.Append(ADataSet.Fields[I].FieldName);
+    end;
+    LBuilder.AppendLine;
+
+    // A unidirectional dataset cannot be bookmarked (GetBookmark raises), and
+    // it cannot be walked twice either: there the caller gets the rows from
+    // wherever the cursor already is, which is the only thing possible.
+    LUseBookmark := not ADataSet.IsUniDirectional;
+    ADataSet.DisableControls;
+    if LUseBookmark then
+      LBookmark := ADataSet.GetBookmark
+    else
+      LBookmark := nil;
+    try
+      if LUseBookmark then
+        ADataSet.First;
+      while not ADataSet.Eof do
+      begin
+        for I := 0 to ADataSet.FieldCount - 1 do
+        begin
+          if I > 0 then
+            LBuilder.Append(SEP);
+          LBuilder.Append(FieldToTableCell(ADataSet.Fields[I]));
+        end;
+        LBuilder.AppendLine;
+        ADataSet.Next;
+      end;
+    finally
+      if LUseBookmark then
+      begin
+        if ADataSet.BookmarkValid(LBookmark) then
+          ADataSet.GotoBookmark(LBookmark);
+        ADataSet.FreeBookmark(LBookmark);
+      end;
+      ADataSet.EnableControls;
+    end;
+
+    Result := LBuilder.ToString;
+  finally
+    LBuilder.Free;
+  end;
+end;
+
+class function TMCPToolResult.FromDataSet(ADataSet: TDataSet;
+  const AFormat: TMCPDataSetFormat): TMCPToolResult;
+begin
+  case AFormat of
+    TMCPDataSetFormat.Table:
+      Result := TMCPToolResult.Text(MCPDataSetToTable(ADataSet));
+  else
+    Result := TMCPToolResult.FromDataSet(ADataSet);
   end;
 end;
 

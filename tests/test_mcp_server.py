@@ -12,6 +12,7 @@ Usage:
 import argparse
 import base64
 import json
+import re
 import sys
 import uuid
 import requests
@@ -303,6 +304,32 @@ def test_tools_list(client: MCPTestClient, result: TestResult):
                 result.ok(f"tool structure: {name} OK")
 
 
+def test_tool_names_provider_compatible(client: MCPTestClient, result: TestResult):
+    """Every tool name must match ^[a-zA-Z0-9_-]{1,128}$.
+
+    MCP itself allows any name, but OpenAI, Anthropic, Azure and Bedrock all
+    reject the *entire* tools payload when one name falls outside that pattern.
+    A single dotted route name (e.g. an auto-bridged /system/describeserver.info)
+    is therefore enough to make the server unusable from any real model.
+    """
+    print("\n--- Tool Name Provider Compatibility ---")
+
+    resp = client.rpc_request("tools/list")
+    body = assert_jsonrpc(result, "tools/list (names)", resp)
+    if not body:
+        return
+
+    tools = body.get("result", {}).get("tools", [])
+    pattern = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+    offenders = [t.get("name") for t in tools if not pattern.match(t.get("name", ""))]
+
+    if offenders:
+        result.fail("tool-names: provider-compatible",
+                    f"names rejected by OpenAI/Anthropic function calling: {offenders}")
+    else:
+        result.ok(f"tool-names: all {len(tools)} names match ^[a-zA-Z0-9_-]{{1,128}}$")
+
+
 # --- Text tools ---
 
 def test_text_tools(client: MCPTestClient, result: TestResult):
@@ -538,6 +565,56 @@ def test_serialization_tools(client: MCPTestClient, result: TestResult):
                 result.fail("get_person_list", f"Not valid JSON: '{text[:100]}'")
         else:
             result.fail("get_person_list", "No text content")
+
+    # get_dataset_json / get_dataset_table (TMCPToolResult.FromDataSet, both formats)
+    resp = client.call_tool("get_dataset_json")
+    body = assert_jsonrpc(result, "get_dataset_json", resp)
+    json_text = get_tool_text(body) if body else None
+    if json_text:
+        try:
+            rows = json.loads(json_text)
+            if isinstance(rows, list) and len(rows) == 3:
+                result.ok("get_dataset_json: returned 3 rows")
+            else:
+                result.fail("get_dataset_json", f"Expected 3 rows, got {rows}")
+        except json.JSONDecodeError:
+            result.fail("get_dataset_json", f"Not valid JSON: '{json_text[:100]}'")
+    else:
+        result.fail("get_dataset_json", "No text content")
+
+    resp = client.call_tool("get_dataset_table")
+    body = assert_jsonrpc(result, "get_dataset_table", resp)
+    table_text = get_tool_text(body) if body else None
+    if table_text:
+        lines = [ln for ln in table_text.splitlines() if ln.strip()]
+        if lines and lines[0] == "id | code | price | active":
+            result.ok("get_dataset_table: header row written once")
+        else:
+            result.fail("get_dataset_table", f"Unexpected header: '{lines[0] if lines else ''}'")
+
+        if len(lines) == 4:
+            result.ok("get_dataset_table: header + 3 data rows")
+        else:
+            result.fail("get_dataset_table", f"Expected 4 lines, got {len(lines)}")
+
+        if len(lines) > 1 and lines[1] == "1 | EL-001 | 899.5 | true":
+            result.ok("get_dataset_table: invariant float and boolean rendering")
+        else:
+            result.fail("get_dataset_table", f"Unexpected first row: '{lines[1] if len(lines) > 1 else ''}'")
+
+        # NULL price must render as an empty cell, not as 'null' or '0'
+        if len(lines) > 3 and lines[3] == "3 | EL-003 |  | true":
+            result.ok("get_dataset_table: NULL renders as an empty cell")
+        else:
+            result.fail("get_dataset_table", f"Unexpected NULL row: '{lines[3] if len(lines) > 3 else ''}'")
+
+        # The whole point of the Table format: fewer characters than JSON rows.
+        if json_text and len(table_text) < len(json_text):
+            result.ok(f"get_dataset_table: {len(table_text)} chars vs {len(json_text)} as JSON")
+        elif json_text:
+            result.fail("get_dataset_table", f"Table ({len(table_text)}) not smaller than JSON ({len(json_text)})")
+    else:
+        result.fail("get_dataset_table", "No text content")
 
 
 # --- Content type tools ---
@@ -1938,6 +2015,7 @@ def main():
 
     # Tool listing
     test_tools_list(client, result)
+    test_tool_names_provider_compatible(client, result)
 
     # Tool execution - all categories
     test_text_tools(client, result)

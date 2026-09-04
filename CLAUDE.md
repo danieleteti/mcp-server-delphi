@@ -22,6 +22,25 @@ dcc32.exe tests/testproject/MCPServerUnitTest.dpr -Etests/testproject/bin
 
 The project files can also be opened and built directly in the Delphi IDE.
 
+## Tests
+
+```bash
+testsuild_all.bat   # builds testproject, clientproject, agentproject (Win32 Debug; set BDS to override the RAD Studio path)
+testsun_all.bat     # starts the test server, then runs every suite and propagates the first failure
+```
+
+Five suites run: the Python HTTP compliance suite, the Python stdio suite, the Delphi `TMCPClient` suite over HTTP and over stdio, and the `TMCPOpenAIAgent` suite driven by an embedded fake LLM.
+
+The agent suite additionally contains a **live provider suite** that talks to a real OpenAI-compatible endpoint. It is skipped unless a key is present, so the default run stays offline and free:
+
+```bash
+set OPENROUTER_API_KEY=sk-or-...
+testsun_all.bat
+rem or, directly: MCPAgentTest.exe --api-key <key> [--llm-base-url <url>] [--model <id>]
+```
+
+It covers what a fake LLM cannot: that a real provider accepts the generated `inputSchema`, dispatches the tools, streams SSE into `OnContentDelta`, still reports usage on a streamed run, and reads a `TMCPDataSetFormat.Table` result correctly. Run it after touching tool descriptors, the agent loop or the tool-name generation - a fake server accepts payloads that Anthropic, OpenAI, Azure and Bedrock reject outright.
+
 ## Architecture
 
 ### Core Library (`Sources/`)
@@ -31,7 +50,7 @@ The library follows an **attribute-driven, RTTI-based discovery** pattern with D
 - **MVCFramework.MCP.Server.pas** — Contains `TMCPServer` (shared registry, created once at startup, scans providers via RTTI) and `TMCPEndpoint` (published object, created per request via `PublishObject` factory). MCP method names with `/` are stripped in `OnBeforeRoutingHook` (e.g. `tools/list` → `ToolsList`).
 - **MVCFramework.MCP.Attributes.pas** — Custom attributes: `MCPToolAttribute` and `MCPParamAttribute` (placed on parameters) for tools, `MCPResourceAttribute`, `MCPPromptAttribute`, `MCPPromptArgAttribute`. Parameter presence is expressed via `TMCPParamPresence = (Required, Optional)` (scoped enum, `{$SCOPEDENUMS ON}`) — the second argument of `[MCPParam]` and `[MCPPromptArg]`, defaulting to `Required` and `Optional` respectively.
 - **MVCFramework.MCP.Session.pas** — Thread-safe in-memory session manager with 30-minute timeout using `TCriticalSection`.
-- **MVCFramework.MCP.ToolProvider.pas / MVCFramework.MCP.ResourceProvider.pas / MVCFramework.MCP.PromptProvider.pas** — Base classes and result record types. Result types use factory methods (`TMCPToolResult.Text()`, `.Error()`, `.JSON()`, `.Image()`).
+- **MVCFramework.MCP.ToolProvider.pas / MVCFramework.MCP.ResourceProvider.pas / MVCFramework.MCP.PromptProvider.pas** — Base classes and result record types. Result types use factory methods (`TMCPToolResult.Text()`, `.Error()`, `.JSON()`, `.Image()`). `FromDataSet` takes an optional `TMCPDataSetFormat`: `Json` (default, one JSON object per row) or `Table` (pipe-separated, header written once). Prefer `Table` for anything a model reads — a tool result is re-sent on every later turn of the run, so repeating the field names on every row is paid for once per turn.
 - **MVCFramework.MCP.Types.pas** — Protocol constants and capability records.
 
 ### Provider Pattern
@@ -80,7 +99,7 @@ Same wizard-style layout as `sample/` (BootConfigU + EngineConfigU + slim .dpr).
 
 - **MCPServerUnitTest.dpr** — Test server with comprehensive providers.
 - **BootConfigU.pas / EngineConfigU.pas** — Boot + engine wiring (conformance providers registered via unit `initialization` sections).
-- **MCPTestToolsU.pas** — 18 tools exercising all `TMCPToolResult` factory methods and parameter types.
+- **MCPTestToolsU.pas** — 20 tools exercising all `TMCPToolResult` factory methods and parameter types, including both `FromDataSet` wire formats (`get_dataset_json` / `get_dataset_table`).
 - **MCPTestResourcesU.pas** — 3 resources (text and blob).
 - **MCPTestPromptsU.pas** — 3 prompts with required/optional arguments.
 - **MCPConformanceProvidersU.pas** — Conformance providers registering tools, resources, and prompts.

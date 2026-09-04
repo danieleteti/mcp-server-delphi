@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server for DMVCFramework - TMCPOpenAIAgent compliance test
 //
@@ -20,6 +20,11 @@
 //
 // Usage:
 //   MCPAgentTest.exe [--mcp-url http://localhost:8080/mcp] [--llm-port 9091]
+//                    [--api-key <key>] [--llm-base-url <url>] [--model <id>]
+//
+// Supplying an API key (or setting OPENROUTER_API_KEY) additionally runs the
+// live provider suite against a real OpenAI-compatible endpoint. Without a
+// key those cases are skipped and the run stays offline.
 //
 // ***************************************************************************
 
@@ -898,6 +903,245 @@ begin
   LDeltas.Free;
 end;
 
+// A run that dispatches a tool has two turns, and their texts are two separate
+// documents. OnTurnBoundary is what tells a streaming UI where one ends: without
+// it a heading that opens the second turn gets concatenated onto the last word
+// of the first one.
+procedure TestTurnBoundaryEvent(const AMCPURL: string; ALLMPort: Integer; AR: TTestRunner);
+var
+  LAgent: TMCPOpenAIAgent;
+  LMessages: TJSONArray;
+  LUserMsg: TJSONObject;
+  LResult: TMCPAgentResult;
+  LBoundaries: TStringList;
+begin
+  AR.Section('Turn boundary event');
+  G_Mode := tmDispatchOnce;
+  G_RequestCount := 0;
+
+  LBoundaries := TStringList.Create;
+  LAgent := TMCPOpenAIAgent.Create(
+    AMCPURL,
+    'fake-api-key',
+    'fake-model',
+    Format('http://127.0.0.1:%d/v1', [ALLMPort]));
+  try
+    LAgent.MaxTurns := 5;
+    LAgent.OnTurnBoundary :=
+      procedure(const AContent: string)
+      begin
+        LBoundaries.Add(AContent);
+      end;
+
+    LMessages := TJSONArray.Create;
+    try
+      LUserMsg := TJSONObject.Create;
+      LUserMsg.AddPair('role', 'user');
+      LUserMsg.AddPair('content', 'Reverse "hello"');
+      LMessages.AddElement(LUserMsg);
+
+      LResult := LAgent.Run(LMessages);
+
+      // One tool-dispatching turn, then the final turn: exactly one boundary,
+      // and never one for the turn whose text Run returns.
+      if LBoundaries.Count = 1 then
+        AR.Ok('OnTurnBoundary fired once for the tool-dispatching turn')
+      else
+        AR.Fail('OnTurnBoundary count',
+          Format('expected 1, got %d', [LBoundaries.Count]));
+
+      if LResult.Content = 'reversed: olleh' then
+        AR.Ok('OnTurnBoundary did not disturb the run result')
+      else
+        AR.Fail('OnTurnBoundary run result', LResult.Content);
+    finally
+      LMessages.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('OnTurnBoundary', E.ClassName + ': ' + E.Message);
+  end;
+  LAgent.Free;
+  LBoundaries.Free;
+end;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Live provider suite (opt-in)
+//
+// Every case above talks to the embedded fake LLM, so the suite is hermetic,
+// free and deterministic. The cases below instead drive a real
+// OpenAI-compatible provider (OpenRouter by default) to prove the parts a
+// fake server cannot: that a real model accepts the tool descriptors we
+// generate, that it dispatches them, that its SSE framing feeds
+// OnContentDelta, and that usage accounting survives a streamed run.
+//
+// They run only when an API key is available (--api-key or the
+// OPENROUTER_API_KEY environment variable) and are skipped otherwise, so the
+// default pipeline never depends on the network or spends money.
+// ──────────────────────────────────────────────────────────────────────────
+
+function NewUserMessages(const AText: string): TJSONArray;
+var
+  LUserMsg: TJSONObject;
+begin
+  Result := TJSONArray.Create;
+  LUserMsg := TJSONObject.Create;
+  LUserMsg.AddPair('role', 'user');
+  LUserMsg.AddPair('content', AText);
+  Result.AddElement(LUserMsg);
+end;
+
+function NewLiveAgent(const AMCPURL, ABaseURL, AAPIKey, AModel: string): TMCPOpenAIAgent;
+begin
+  Result := TMCPOpenAIAgent.Create(AMCPURL, AAPIKey, AModel, ABaseURL);
+  Result.MaxTurns := 6;
+  Result.SystemPrompt :=
+    'You are a test agent. Always use the available MCP tools to answer, ' +
+    'never compute the answer yourself. Reply with the bare result and nothing else.';
+  Result.HTTPReferer := 'https://github.com/danieleteti/delphimvcframework';
+  Result.XTitle := 'MCPAgentTest';
+end;
+
+// A real model, a real tool call: proves the generated inputSchema is
+// something a provider actually accepts and dispatches.
+procedure TestLiveToolCall(const AMCPURL, ABaseURL, AAPIKey, AModel: string; AR: TTestRunner);
+var
+  LAgent: TMCPOpenAIAgent;
+  LMessages: TJSONArray;
+  LResult: TMCPAgentResult;
+  LBoundaries: Integer;
+begin
+  AR.Section('Live provider: tool dispatch');
+  LBoundaries := 0;
+  LAgent := NewLiveAgent(AMCPURL, ABaseURL, AAPIKey, AModel);
+  try
+    LAgent.OnTurnBoundary :=
+      procedure(const AContent: string)
+      begin
+        Inc(LBoundaries);
+      end;
+
+    LMessages := NewUserMessages('Add the integers 2 and 40 using the tools.');
+    try
+      LResult := LAgent.Run(LMessages);
+
+      if LBoundaries >= 1 then
+        AR.Ok(Format('live OnTurnBoundary fired %d time(s)', [LBoundaries]))
+      else
+        AR.Fail('live OnTurnBoundary', 'never fired on a run that used tools');
+
+      if Pos('42', LResult.Content) > 0 then
+        AR.Ok('live tool dispatch produced the tool answer')
+      else
+        AR.Fail('live tool dispatch', 'expected 42 in: ' + LResult.Content);
+
+      if LResult.TotalTokens > 0 then
+        AR.Ok(Format('live token accounting (%d prompt, %d completion)',
+          [LResult.PromptTokens, LResult.CompletionTokens]))
+      else
+        AR.Fail('live token accounting', 'provider reported no usage');
+    finally
+      LMessages.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('live tool dispatch', E.ClassName + ': ' + E.Message);
+  end;
+  LAgent.Free;
+end;
+
+// Same run over SSE: the deltas must reconstruct the final content, and
+// StreamUsage must still bring back the usage chunk.
+procedure TestLiveStreaming(const AMCPURL, ABaseURL, AAPIKey, AModel: string; AR: TTestRunner);
+var
+  LAgent: TMCPOpenAIAgent;
+  LMessages: TJSONArray;
+  LResult: TMCPAgentResult;
+  LDeltas: TStringList;
+  LStreamed: string;
+  I: Integer;
+begin
+  AR.Section('Live provider: SSE streaming');
+  LDeltas := TStringList.Create;
+  LAgent := NewLiveAgent(AMCPURL, ABaseURL, AAPIKey, AModel);
+  try
+    LAgent.Streaming := True;
+    LAgent.OnContentDelta :=
+      procedure(const ADelta: string)
+      begin
+        LDeltas.Add(ADelta);
+      end;
+
+    LMessages := NewUserMessages('Reverse the string "hello" using the tools.');
+    try
+      LResult := LAgent.Run(LMessages);
+
+      if LDeltas.Count > 0 then
+        AR.Ok(Format('live streaming delivered %d content delta(s)', [LDeltas.Count]))
+      else
+        AR.Fail('live streaming', 'OnContentDelta never fired');
+
+      LStreamed := '';
+      for I := 0 to LDeltas.Count - 1 do
+        LStreamed := LStreamed + LDeltas[I];
+
+      if Trim(LStreamed) = Trim(LResult.Content) then
+        AR.Ok('live streaming: deltas reconstruct the final content')
+      else
+        AR.Fail('live streaming reconstruction',
+          Format('deltas "%s" vs content "%s"', [Trim(LStreamed), Trim(LResult.Content)]));
+
+      if Pos('olleh', LowerCase(LResult.Content)) > 0 then
+        AR.Ok('live streaming: tool answer present in the streamed reply')
+      else
+        AR.Fail('live streaming answer', 'expected olleh in: ' + LResult.Content);
+
+      if LResult.TotalTokens > 0 then
+        AR.Ok(Format('live streamed token accounting (%d total)', [LResult.TotalTokens]))
+      else
+        AR.Fail('live streamed token accounting', 'no usage chunk on the stream');
+    finally
+      LMessages.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('live streaming', E.ClassName + ': ' + E.Message);
+  end;
+  LAgent.Free;
+  LDeltas.Free;
+end;
+
+// TMCPToolResult.FromDataSet(..., Table) exists to spend fewer tokens than
+// the JSON form. That is only worth something if a real model still reads the
+// rows correctly, which is what this case checks.
+procedure TestLiveDataSetTable(const AMCPURL, ABaseURL, AAPIKey, AModel: string; AR: TTestRunner);
+var
+  LAgent: TMCPOpenAIAgent;
+  LMessages: TJSONArray;
+  LResult: TMCPAgentResult;
+begin
+  AR.Section('Live provider: pipe-table tool result');
+  LAgent := NewLiveAgent(AMCPURL, ABaseURL, AAPIKey, AModel);
+  try
+    LMessages := NewUserMessages(
+      'Call get_dataset_table and answer with the price of row EL-001 only.');
+    try
+      LResult := LAgent.Run(LMessages);
+
+      if (Pos('899.5', LResult.Content) > 0) or (Pos('899,5', LResult.Content) > 0) then
+        AR.Ok('live model read the pipe-table result correctly')
+      else
+        AR.Fail('live pipe-table read', 'expected 899.5 in: ' + LResult.Content);
+    finally
+      LMessages.Free;
+    end;
+  except
+    on E: Exception do
+      AR.Fail('live pipe-table read', E.ClassName + ': ' + E.Message);
+  end;
+  LAgent.Free;
+end;
+
 // ──────────────────────────────────────────────────────────────────────────
 // Main
 // ──────────────────────────────────────────────────────────────────────────
@@ -908,15 +1152,25 @@ var
   LFakeLLM: IMVCServer;
   LR: TTestRunner;
   LSuccess: Boolean;
+  LAPIKey, LLiveBaseURL, LLiveModel: string;
 begin
   ReportMemoryLeaksOnShutdown := True;
   IsMultiThread := True;
   LMCPURL := ParseStringArg('mcp-url', 'http://localhost:8080/mcp');
   LLLMPort := ParseIntArg('llm-port', 9091);
 
+  // Live suite configuration. The key itself is never echoed.
+  LAPIKey := ParseStringArg('api-key', GetEnvironmentVariable('OPENROUTER_API_KEY'));
+  LLiveBaseURL := ParseStringArg('llm-base-url', 'https://openrouter.ai/api/v1');
+  LLiveModel := ParseStringArg('model', 'anthropic/claude-haiku-4-5');
+
   WriteLn('TMCPOpenAIAgent compliance test');
   WriteLn('MCP server : ', LMCPURL);
   WriteLn('Fake LLM   : http://127.0.0.1:', LLLMPort, '/v1/chat/completions');
+  if LAPIKey <> '' then
+    WriteLn('Live LLM   : ', LLiveBaseURL, ' (', LLiveModel, ')')
+  else
+    WriteLn('Live LLM   : skipped (no --api-key / OPENROUTER_API_KEY)');
   WriteLn(StringOfChar('=', 60));
 
   G_RequestLock := TCriticalSection.Create;
@@ -935,10 +1189,26 @@ begin
         TestSingleToolCall(LMCPURL, LLLMPort, LR);
         TestMaxTurnsSafety(LMCPURL, LLLMPort, LR);
         TestStreamingSingleToolCall(LMCPURL, LLLMPort, LR);
+        TestTurnBoundaryEvent(LMCPURL, LLLMPort, LR);
       finally
         LFakeLLM.Stop;
         LFakeLLM := nil;
         FreeAndNil(G_FakeLLMEngine);
+      end;
+
+      // Live provider cases run last: they are the only ones needing the
+      // network, so a missing key or a provider outage cannot mask a real
+      // regression in everything above.
+      if LAPIKey <> '' then
+      begin
+        TestLiveToolCall(LMCPURL, LLiveBaseURL, LAPIKey, LLiveModel, LR);
+        TestLiveStreaming(LMCPURL, LLiveBaseURL, LAPIKey, LLiveModel, LR);
+        TestLiveDataSetTable(LMCPURL, LLiveBaseURL, LAPIKey, LLiveModel, LR);
+      end
+      else
+      begin
+        WriteLn;
+        WriteLn('--- Live provider suite: SKIPPED (no API key) ---');
       end;
     except
       on E: Exception do

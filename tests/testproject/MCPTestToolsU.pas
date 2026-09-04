@@ -1,4 +1,4 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 //
 // MCP Server for DMVCFramework
 //
@@ -108,6 +108,12 @@ type
 
     [MCPTool('get_person_list', 'Returns a collection of sample persons')]
     function GetPersonList: TMCPToolResult;
+
+    [MCPTool('get_dataset_json', 'Returns a sample dataset serialized as JSON rows')]
+    function GetDataSetJson: TMCPToolResult;
+
+    [MCPTool('get_dataset_table', 'Returns the same sample dataset as a pipe table with a single header row')]
+    function GetDataSetTable: TMCPToolResult;
   end;
 
   { Tools testing image, resource, and multi-content results }
@@ -157,6 +163,7 @@ implementation
 uses
   System.SysUtils, System.StrUtils, System.Classes,
   System.Generics.Collections,
+  Data.DB, Datasnap.DBClient, MidasLib,
   JsonDataObjects,
   MVCFramework.MCP.Server;
 
@@ -287,6 +294,60 @@ begin
     Result := TMCPToolResult.FromCollection(LList);
   finally
     LList.Free;
+  end;
+end;
+
+// Sample dataset shared by get_dataset_json and get_dataset_table, so both
+// tools render exactly the same rows and the two wire formats can be
+// compared field by field. Includes a NULL and a float to pin down how the
+// Table format renders them.
+function CreateSampleDataSet: TClientDataSet;
+begin
+  Result := TClientDataSet.Create(nil);
+  try
+    Result.FieldDefs.Add('id', ftInteger);
+    Result.FieldDefs.Add('code', ftString, 20);
+    Result.FieldDefs.Add('price', ftFloat);
+    Result.FieldDefs.Add('active', ftBoolean);
+    Result.CreateDataSet;
+
+    Result.AppendRecord([1, 'EL-001', 899.5, True]);
+    Result.AppendRecord([2, 'EL-002', 349.0, False]);
+    Result.Append;
+    Result.FieldByName('id').AsInteger := 3;
+    Result.FieldByName('code').AsString := 'EL-003';
+    // price left NULL on purpose
+    Result.FieldByName('active').AsBoolean := True;
+    Result.Post;
+
+    Result.First;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TSerializationTools.GetDataSetJson: TMCPToolResult;
+var
+  LDS: TClientDataSet;
+begin
+  LDS := CreateSampleDataSet;
+  try
+    Result := TMCPToolResult.FromDataSet(LDS);
+  finally
+    LDS.Free;
+  end;
+end;
+
+function TSerializationTools.GetDataSetTable: TMCPToolResult;
+var
+  LDS: TClientDataSet;
+begin
+  LDS := CreateSampleDataSet;
+  try
+    Result := TMCPToolResult.FromDataSet(LDS, TMCPDataSetFormat.Table);
+  finally
+    LDS.Free;
   end;
 end;
 

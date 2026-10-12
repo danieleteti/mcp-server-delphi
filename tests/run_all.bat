@@ -63,6 +63,11 @@ python "%TESTS_DIR%test_mcp_server_stdio.py" --cmd "\"%TESTS_DIR%testproject\bin
 SET PY_STDIO_EXIT=%ERRORLEVEL%
 
 echo.
+echo [security] Python security and bridge-filter suite...
+python "%TESTS_DIR%test_mcp_security.py"
+SET PY_SEC_EXIT=%ERRORLEVEL%
+
+echo.
 echo [4/6] Delphi TMCPClient compliance suite (HTTP)...
 "%TESTS_DIR%clientproject\bin\MCPClientTest.exe" --url %MCP_URL%
 SET CLIENT_HTTP_EXIT=%ERRORLEVEL%
@@ -85,6 +90,7 @@ echo.
 echo ===========================================================
 echo Python suite (HTTP)         : exit %PY_HTTP_EXIT%
 echo Python suite (stdio)        : exit %PY_STDIO_EXIT%
+echo Python suite (security)     : exit %PY_SEC_EXIT%
 echo TMCPClient suite (HTTP)     : exit %CLIENT_HTTP_EXIT%
 echo TMCPClient suite (stdio)    : exit %CLIENT_STDIO_EXIT%
 echo TMCPOpenAIAgent suite       : exit %AGENT_EXIT%
@@ -92,6 +98,7 @@ echo ===========================================================
 
 if not "%PY_HTTP_EXIT%"=="0"     exit /b %PY_HTTP_EXIT%
 if not "%PY_STDIO_EXIT%"=="0"    exit /b %PY_STDIO_EXIT%
+if not "%PY_SEC_EXIT%"=="0"      exit /b %PY_SEC_EXIT%
 if not "%CLIENT_HTTP_EXIT%"=="0" exit /b %CLIENT_HTTP_EXIT%
 if not "%CLIENT_STDIO_EXIT%"=="0" exit /b %CLIENT_STDIO_EXIT%
 if not "%AGENT_EXIT%"=="0"       exit /b %AGENT_EXIT%

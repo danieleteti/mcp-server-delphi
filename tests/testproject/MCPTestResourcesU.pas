@@ -47,6 +47,10 @@ type
       'Returns a small test logo as base64 blob', 'image/png')]
     function GetLogo(const URI: string): TMCPResourceResult;
 
+    [MCPResource('caller://whoami', 'Caller', 'Returns the caller as the provider sees it',
+      'text/plain')]
+    function GetCaller(const URI: string): TMCPResourceResult;
+
     // --- Templated resources (RFC 6570 Level 1) ---
 
     // Single-variable template. Method parameter "id" matches the {id} placeholder.
@@ -66,6 +70,7 @@ implementation
 
 uses
   System.SysUtils,
+  MVCFramework.MCP.Types,
   MVCFramework.MCP.Server;
 
 { TTestResources }
@@ -90,6 +95,15 @@ begin
   Result := TMCPResourceResult.Blob(URI,
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==',
     'image/png');
+end;
+
+function TTestResources.GetCaller(const URI: string): TMCPResourceResult;
+const
+  TRANSPORT: array [TMCPTransportKind] of string = ('http', 'stdio');
+begin
+  Result := TMCPResourceResult.Text(URI,
+    TRANSPORT[Caller.Transport] + '|' + Caller.UserName + '|' + string.Join(',', Caller.Roles),
+    'text/plain');
 end;
 
 function TTestResources.GetUser(const URI, id: string): TMCPResourceResult;

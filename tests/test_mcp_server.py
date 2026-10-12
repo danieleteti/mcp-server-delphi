@@ -1366,24 +1366,22 @@ def test_http_methods(client: MCPTestClient, result: TestResult):
     }
 
     resp = requests.get(client.base_url, headers=headers)
-    if resp.status_code in (404, 405):
-        result.ok(f"GET: rejected with HTTP {resp.status_code}")
-    elif resp.status_code == 200:
-        result.ok("GET: accepted (JSON-RPC method listing)")
+    if resp.status_code == 405:
+        result.ok("GET: rejected with HTTP 405")
     else:
-        result.fail("GET", f"HTTP {resp.status_code}")
+        result.fail("GET", f"HTTP {resp.status_code}, expected 405")
 
     resp = requests.put(client.base_url, json={}, headers=headers)
-    if resp.status_code in (404, 405):
-        result.ok(f"PUT: rejected with HTTP {resp.status_code}")
+    if resp.status_code == 405:
+        result.ok("PUT: rejected with HTTP 405")
     else:
-        result.fail("PUT", f"HTTP {resp.status_code}, expected 404 or 405")
+        result.fail("PUT", f"HTTP {resp.status_code}, expected 405")
 
     resp = requests.patch(client.base_url, json={}, headers=headers)
-    if resp.status_code in (404, 405):
-        result.ok(f"PATCH: rejected with HTTP {resp.status_code}")
+    if resp.status_code == 405:
+        result.ok("PATCH: rejected with HTTP 405")
     else:
-        result.fail("PATCH", f"HTTP {resp.status_code}, expected 404 or 405")
+        result.fail("PATCH", f"HTTP {resp.status_code}, expected 405")
 
 
 def test_concurrent_sessions(client: MCPTestClient, result: TestResult):

@@ -28,7 +28,7 @@ interface
 
 uses
   System.SysUtils, System.Rtti, System.RegularExpressions,
-  JsonDataObjects;
+  JsonDataObjects, MVCFramework.MCP.Types;
 
 type
   EMCPSessionError = class(Exception);
@@ -43,6 +43,7 @@ type
   private
     FServer: TObject;  { Actually TMCPServer; typed as TObject to avoid circular reference }
     FSessionId: string;
+    FCaller: TMCPCaller;
   public
     constructor Create(AServer: TObject);
 
@@ -67,6 +68,7 @@ type
     function DoPromptsGet(AParams: TJDOJsonObject): TJDOJsonObject;
 
     property SessionId: string read FSessionId write FSessionId;
+    property Caller: TMCPCaller read FCaller write FCaller;
   end;
 
 implementation
@@ -75,7 +77,6 @@ uses
   System.TypInfo,
   MVCFramework.Logger,
   MVCFramework.MCP.Server,
-  MVCFramework.MCP.Types,
   MVCFramework.MCP.ToolProvider,
   MVCFramework.MCP.ResourceProvider,
   MVCFramework.MCP.PromptProvider,
@@ -392,6 +393,7 @@ begin
 
   LProvider := LToolInfo.ProviderClass.Create;
   try
+    LProvider.Caller := FCaller;
     LToolResult := LToolInfo.RttiMethod.Invoke(LProvider, LArgs).AsType<TMCPToolResult>;
     Result := LToolResult.ToJSON;
   finally
@@ -526,6 +528,7 @@ begin
 
   LProvider := LInfo.ProviderClass.Create;
   try
+    LProvider.Caller := FCaller;
     if LInfo.IsTemplate then
     begin
       // Method signature: (URI, var1, var2, ...) all strings. Build the
@@ -616,6 +619,7 @@ begin
   try
     LProvider := LInfo.ProviderClass.Create;
     try
+      LProvider.Caller := FCaller;
       LPromptResult := LInfo.RttiMethod.Invoke(LProvider,
         [TValue.From<TJDOJsonObject>(LArgs)]).AsType<TMCPPromptResult>;
       Result := LPromptResult.ToJSON;

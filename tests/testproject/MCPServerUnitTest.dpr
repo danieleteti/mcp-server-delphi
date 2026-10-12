@@ -47,6 +47,8 @@ uses
   MCPTestPromptsU in 'MCPTestPromptsU.pas',
   MCPConformanceProvidersU in 'MCPConformanceProvidersU.pas',
   MCPBridgeTestControllerU in 'MCPBridgeTestControllerU.pas',
+  TestFlagsU in 'TestFlagsU.pas',
+  TestAuthHandlerU in 'TestAuthHandlerU.pas',
   BootConfigU in 'BootConfigU.pas',
   EngineConfigU in 'EngineConfigU.pas';
 
@@ -189,7 +191,7 @@ begin
   begin
     LogI('** MCP Server Unit Test ** powered by DMVCFramework build ' + DMVCFRAMEWORK_VERSION);
     try
-      RunServer(dotEnv.Env('dmvc.server.port', 8080));
+      RunServer(StrToInt(FlagValue('--port', IntToStr(dotEnv.Env('dmvc.server.port', 8080)))));
     except
       on E: Exception do
         LogF(E.ClassName + ': ' + E.Message);

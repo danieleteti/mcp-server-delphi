@@ -138,6 +138,8 @@
         <DCCReference Include="MCPTestPromptsU.pas"/>
         <DCCReference Include="MCPConformanceProvidersU.pas"/>
         <DCCReference Include="MCPBridgeTestControllerU.pas"/>
+        <DCCReference Include="TestFlagsU.pas"/>
+        <DCCReference Include="TestAuthHandlerU.pas"/>
         <DCCReference Include="BootConfigU.pas"/>
         <DCCReference Include="EngineConfigU.pas"/>
         <BuildConfiguration Include="Base">

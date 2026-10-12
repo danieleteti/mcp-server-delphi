@@ -30,9 +30,17 @@ uses
   JsonDataObjects;
 
 const
-  MCP_SERVER_LIBRARY_VERSION = '0.8.2';
+  MCP_SERVER_LIBRARY_VERSION = '0.9.0';
   MCP_PROTOCOL_VERSION = '2025-03-26';
   MCP_ENDPOINT = '/mcp';
+  { Set in TWebContext.Data by MCPGuard on every request it let through. The
+    value says whether the guard authenticated the request itself (token, or
+    nothing to authenticate) or left authentication to the application
+    (AuthenticationHandledElsewhere): in that case the endpoint also requires
+    a valid logged user. }
+  MCP_GUARD_MARK = 'mcp.guard';
+  MCP_GUARD_VETTED = '1';
+  MCP_GUARD_VETTED_AUTH_ELSEWHERE = 'auth-elsewhere';
   MCP_SESSION_HEADER = 'Mcp-Session-Id';
   MCP_ERR_SESSION = -32001;
 
@@ -55,6 +63,18 @@ function MCPIsValidToolName(const AName: string): Boolean;
 function MCPSanitizeToolName(const AName: string): string;
 
 type
+  {$SCOPEDENUMS ON}
+  TMCPTransportKind = (Http, Stdio);
+  {$SCOPEDENUMS OFF}
+
+  { Who is calling, as far as the transport knows. Empty user on stdio and on
+    an unauthenticated HTTP endpoint. }
+  TMCPCaller = record
+    Transport: TMCPTransportKind;
+    UserName: string;
+    Roles: TArray<string>;
+  end;
+
   TMCPCapabilities = record
     SupportsTools: Boolean;
     SupportsResources: Boolean;

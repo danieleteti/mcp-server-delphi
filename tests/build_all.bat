@@ -36,5 +36,9 @@ msbuild "%TESTS_DIR%agentproject\MCPAgentTest.dproj" /p:Config=Debug /p:Platform
 if errorlevel 1 exit /b 1
 
 echo.
+echo === logorder probe (Win32) ===
+msbuild "%TESTS_DIR%logorder\LogOrderProbe.dproj" /p:Config=Debug /p:Platform=Win32 /t:Build /v:minimal /nologo
+if errorlevel 1 exit /b 1
+echo.
 echo === ALL TEST PROJECTS BUILT ===
 endlocal

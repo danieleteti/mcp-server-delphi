@@ -28,6 +28,7 @@ interface
 
 uses
   MVCFramework.MCP.ToolProvider,
+  MVCFramework.MCP.Types,
   MVCFramework.MCP.Attributes;
 
 type
@@ -114,6 +115,9 @@ type
 
     [MCPTool('get_dataset_table', 'Returns the same sample dataset as a pipe table with a single header row')]
     function GetDataSetTable: TMCPToolResult;
+
+    [MCPTool('whoami', 'Returns the caller as the provider sees it')]
+    function WhoAmI: TMCPToolResult;
   end;
 
   { Tools testing image, resource, and multi-content results }
@@ -337,6 +341,14 @@ begin
   finally
     LDS.Free;
   end;
+end;
+
+function TSerializationTools.WhoAmI: TMCPToolResult;
+const
+  TRANSPORT: array [TMCPTransportKind] of string = ('http', 'stdio');
+begin
+  Result := TMCPToolResult.Text(
+    TRANSPORT[Caller.Transport] + '|' + Caller.UserName + '|' + string.Join(',', Caller.Roles));
 end;
 
 function TSerializationTools.GetDataSetTable: TMCPToolResult;

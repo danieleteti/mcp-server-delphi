@@ -27,7 +27,7 @@ unit MVCFramework.MCP.ResourceProvider;
 interface
 
 uses
-  JsonDataObjects, System.SysUtils;
+  JsonDataObjects, System.SysUtils, MVCFramework.MCP.Types;
 
 type
   TMCPResourceResult = record
@@ -56,7 +56,11 @@ type
   end;
 
   TMCPResourceProvider = class
+  private
+    FCaller: TMCPCaller;
   public
+    { Set by the transport before the method is invoked. }
+    property Caller: TMCPCaller read FCaller write FCaller;
     constructor Create; virtual;
     destructor Destroy; override;
   end;

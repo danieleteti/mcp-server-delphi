@@ -56,6 +56,41 @@ type
     [MVCHTTPMethod([httpPOST])]
     [MVCDoc('Echoes the request body')]
     procedure PostEcho(const [MVCFromBody] body: string);
+
+    [MVCPath('/item/($id)')]
+    [MVCHTTPMethod([httpDELETE])]
+    [MVCDoc('Deletes an item')]
+    procedure DeleteItem(const id: string);
+
+    [MVCPath('/both')]
+    [MVCHTTPMethod([httpPUT, httpDELETE])]
+    [MVCDoc('Answers PUT and DELETE')]
+    procedure PutOrDelete;
+
+    [MVCPath('/admin/stats')]
+    [MVCHTTPMethod([httpGET])]
+    [MVCDoc('Admin statistics')]
+    procedure AdminStats;
+
+    [MVCPath('/whoheader')]
+    [MVCHTTPMethod([httpGET])]
+    [MVCDoc('Returns the value of the X-Bridge-Test request header')]
+    procedure WhoHeader;
+
+    [MVCPath('/produces/plain')]
+    [MVCHTTPMethod([httpGET])]
+    [MVCProduces(TMVCMediaType.TEXT_PLAIN)]
+    [MVCDoc('An action that produces text/plain: the router matches it against Accept')]
+    function GetPlain: string;
+  end;
+
+  [MVCPath('/bridge-other')]
+  TMCPBridgeOtherController = class(TMVCController)
+  public
+    [MVCPath]
+    [MVCHTTPMethod([httpGET])]
+    [MVCDoc('Another controller')]
+    procedure GetOther;
   end;
 
 implementation
@@ -85,6 +120,36 @@ end;
 procedure TMCPBridgeTestController.PostEcho(const body: string);
 begin
   Render(body);
+end;
+
+procedure TMCPBridgeTestController.DeleteItem(const id: string);
+begin
+  Render('ok');
+end;
+
+procedure TMCPBridgeTestController.PutOrDelete;
+begin
+  Render('ok');
+end;
+
+procedure TMCPBridgeTestController.AdminStats;
+begin
+  Render('ok');
+end;
+
+procedure TMCPBridgeTestController.WhoHeader;
+begin
+  Render(Context.Request.Headers['X-Bridge-Test']);
+end;
+
+function TMCPBridgeTestController.GetPlain: string;
+begin
+  Result := 'plain-ok';
+end;
+
+procedure TMCPBridgeOtherController.GetOther;
+begin
+  Render('ok');
 end;
 
 end.

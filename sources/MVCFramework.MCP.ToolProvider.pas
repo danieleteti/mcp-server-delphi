@@ -27,7 +27,7 @@ unit MVCFramework.MCP.ToolProvider;
 interface
 
 uses
-  JsonDataObjects, System.SysUtils, System.TypInfo, System.Classes, Data.DB;
+  JsonDataObjects, System.SysUtils, System.TypInfo, System.Classes, Data.DB, MVCFramework.MCP.Types;
 
 {$SCOPEDENUMS ON}
 
@@ -205,7 +205,11 @@ type
   end;
 
   TMCPToolProvider = class
+  private
+    FCaller: TMCPCaller;
   public
+    { Set by the transport before the method is invoked. }
+    property Caller: TMCPCaller read FCaller write FCaller;
     constructor Create; virtual;
     destructor Destroy; override;
 

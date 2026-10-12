@@ -33,6 +33,7 @@ type
   TMCPStdioTransport = class
   private
     FHandler: TMCPRequestHandler;
+    FServerRef: TObject;
     procedure LogStderr(const AMessage: string);
     procedure WriteResponse(const AJson: string);
   public
@@ -57,9 +58,15 @@ const
 { TMCPStdioTransport }
 
 constructor TMCPStdioTransport.Create(AServer: TObject);
+var
+  LCaller: TMCPCaller;
 begin
   inherited Create;
+  FServerRef := AServer;
   FHandler := TMCPRequestHandler.Create(AServer);
+  LCaller := Default(TMCPCaller);
+  LCaller.Transport := TMCPTransportKind.Stdio;
+  FHandler.Caller := LCaller;
 end;
 
 destructor TMCPStdioTransport.Destroy;
@@ -100,6 +107,7 @@ begin
     output even though all-ASCII payloads work. }
   SetTextCodePage(Input, CP_UTF8);
   SetTextCodePage(Output, CP_UTF8);
+  TMCPServer(FServerRef).LogRegistrySummaryOnce;
 
   LogStderr('MCP stdio transport started');
   while not EOF(Input) do

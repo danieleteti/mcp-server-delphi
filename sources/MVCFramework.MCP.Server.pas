@@ -127,7 +127,13 @@ type
     FPrompts: TObjectDictionary<string, TMCPPromptInfo>;
     FRttiContext: TRttiContext;
     FDynamicProviders: TObjectList<TMCPToolProvider>;
+    FSummaryWritten: Boolean;
+    FSummaryExtra: TArray<string>;
+    FSummaryWarnings: TArray<string>;
+    FGuardInstalled: Boolean;
 
+    procedure AddSummaryWarning(const AText: string);
+    procedure CheckToolName(const AName: string);
     procedure ScanToolProvider(AProviderClass: TMCPToolProviderClass);
     procedure ScanResourceProvider(AProviderClass: TMCPResourceProviderClass);
     procedure ScanPromptProvider(AProviderClass: TMCPPromptProviderClass);
@@ -143,6 +149,15 @@ type
     { Singleton accessor. Thread-safe, creates the instance on first call. }
     class function Instance: TMCPServer;
 
+    { Writes the registry summary to the log the first time it is called.
+      Registration itself never logs: a provider unit registers in its
+      initialization section, before the program has configured logging.
+      Warnings found while registering (a tool name outside the provider
+      alphabet) are written here too, at warning level. A line added after the
+      summary is out is logged at once. Safe to call from several threads. }
+    procedure LogRegistrySummaryOnce;
+    procedure AddSummaryLine(const ALine: string);
+
     procedure RegisterToolProvider(AProviderClass: TMCPToolProviderClass);
     procedure RegisterResourceProvider(AProviderClass: TMCPResourceProviderClass);
     procedure RegisterPromptProvider(AProviderClass: TMCPPromptProviderClass);
@@ -156,6 +171,10 @@ type
     { Creates a published endpoint for use with TMVCEngine.PublishObject }
     function CreatePublishedEndpoint: TObject;
 
+    { True once an MCPGuard has been built in this process. From then on the
+      endpoint refuses (403) any request that did not pass through the guard,
+      so a guard whose path does not match the routed one fails closed. }
+    property GuardInstalled: Boolean read FGuardInstalled write FGuardInstalled;
     property ServerName: string read FServerName write FServerName;
     property ServerVersion: string read FServerVersion write FServerVersion;
     property ServerInstructions: string read FServerInstructions write FServerInstructions;
@@ -178,6 +197,7 @@ type
     FServer: TMCPServer;
     FSessionId: string;
     FHandler: TMCPRequestHandler;
+    FRefusedStatus: Integer;
   public
     constructor Create(AServer: TMCPServer);
     destructor Destroy; override;
@@ -225,19 +245,35 @@ type
 implementation
 
 uses
-  MVCFramework.Logger;
+  System.Generics.Defaults, MVCFramework.Logger;
 
-// A tool name outside ^[a-zA-Z0-9_-]{1,128}$ is legal MCP but is rejected by
-// every OpenAI-compatible provider, and they reject the whole tools payload
-// rather than the single tool - so one bad name silences the entire server for
-// any LLM client. The name is the developer's to choose, so this warns
-// instead of rewriting it.
-procedure WarnOnProviderHostileToolName(const AName: string);
+{ 0 when the request may be served; 403 when a guard is installed and this
+  request never went through it; 401 when it did, the guard left
+  authentication to the application, and no valid user is logged in. }
+function MCPRefusalStatus(const AContext: TWebContext): Integer;
+var
+  LMark, LPath: string;
+  I: Integer;
 begin
-  if not MCPIsValidToolName(AName) then
-    LogW(Format('MCP: tool name "%s" does not match ^[a-zA-Z0-9_-]{1,128}$ - ' +
-      'OpenAI/Anthropic-compatible clients will reject the whole tools/list payload. ' +
-      'Suggested name: "%s"', [AName, MCPSanitizeToolName(AName)]));
+  Result := 0;
+  if not TMCPServer.Instance.GuardInstalled then
+    Exit;
+  if not AContext.Data.TryGetValue(MCP_GUARD_MARK, LMark) then
+  begin
+    // The path is the client's: no control characters in the log line.
+    LPath := Copy(AContext.Request.PathInfo, 1, 200);
+    for I := 1 to Length(LPath) do
+      if LPath[I] < ' ' then
+        LPath[I] := '?';
+    LogW('MCP: request to ' + LPath + ' was not vetted by MCPGuard - check that ' +
+      'the guard''s EndpointPath is the full routed path (engine path prefix included)');
+    Exit(HTTP_STATUS.Forbidden);
+  end;
+  // Not LoggedUser.IsValid: it also needs LoggedSince, which the JWT middleware
+  // takes from the optional iat claim.
+  if (LMark = MCP_GUARD_VETTED_AUTH_ELSEWHERE) and
+     not (AContext.LoggedUserExists and not AContext.LoggedUser.UserName.IsEmpty) then
+    Result := HTTP_STATUS.Unauthorized;
 end;
 
 { TMCPToolInfo }
@@ -304,6 +340,88 @@ begin
   inherited;
 end;
 
+procedure TMCPServer.AddSummaryLine(const ALine: string);
+var
+  LLogNow: Boolean;
+begin
+  TMonitor.Enter(FInstanceLock);
+  try
+    LLogNow := FSummaryWritten;
+    if not LLogNow then
+      FSummaryExtra := FSummaryExtra + [ALine];
+  finally
+    TMonitor.Exit(FInstanceLock);
+  end;
+  if LLogNow then
+    LogI(ALine);
+end;
+
+procedure TMCPServer.AddSummaryWarning(const AText: string);
+var
+  LLogNow: Boolean;
+begin
+  TMonitor.Enter(FInstanceLock);
+  try
+    LLogNow := FSummaryWritten;
+    if not LLogNow then
+      FSummaryWarnings := FSummaryWarnings + [AText];
+  finally
+    TMonitor.Exit(FInstanceLock);
+  end;
+  if LLogNow then
+    LogW(AText);
+end;
+
+// A tool name outside ^[a-zA-Z0-9_-]{1,128}$ is legal MCP but is rejected by
+// every OpenAI-compatible provider, and they reject the whole tools payload
+// rather than the single tool - so one bad name silences the entire server for
+// any LLM client. The name is the developer's to choose, so this warns
+// (later, from the summary) instead of rewriting it.
+procedure TMCPServer.CheckToolName(const AName: string);
+begin
+  if not MCPIsValidToolName(AName) then
+    AddSummaryWarning(Format('MCP: tool name "%s" does not match ^[a-zA-Z0-9_-]{1,128}$ - ' +
+      'OpenAI/Anthropic-compatible clients will reject the whole tools/list payload. ' +
+      'Suggested name: "%s"', [AName, MCPSanitizeToolName(AName)]));
+end;
+
+procedure TMCPServer.LogRegistrySummaryOnce;
+var
+  LNames: TArray<string>;
+  LLine: string;
+  LExtra, LWarnings: TArray<string>;
+begin
+  // The flag only goes from False to True: the unlocked read keeps the
+  // per-request path off the lock once the summary is out.
+  if FSummaryWritten then
+    Exit;
+  TMonitor.Enter(FInstanceLock);
+  try
+    if FSummaryWritten then
+      Exit;
+    FSummaryWritten := True;
+    LExtra := FSummaryExtra;
+    LWarnings := FSummaryWarnings;
+    FSummaryExtra := nil;
+    FSummaryWarnings := nil;
+  finally
+    TMonitor.Exit(FInstanceLock);
+  end;
+  LNames := FTools.Keys.ToArray;
+  TArray.Sort<string>(LNames);
+  LogI(Format('MCP: %d tool(s): %s', [Length(LNames), string.Join(', ', LNames)]));
+  LNames := FResources.Keys.ToArray;
+  TArray.Sort<string>(LNames);
+  LogI(Format('MCP: %d resource(s): %s', [Length(LNames), string.Join(', ', LNames)]));
+  LNames := FPrompts.Keys.ToArray;
+  TArray.Sort<string>(LNames);
+  LogI(Format('MCP: %d prompt(s): %s', [Length(LNames), string.Join(', ', LNames)]));
+  for LLine in LExtra do
+    LogI(LLine);
+  for LLine in LWarnings do
+    LogW(LLine);
+end;
+
 function TMCPServer.CreatePublishedEndpoint: TObject;
 begin
   Result := TMCPEndpoint.Create(Self);
@@ -339,7 +457,7 @@ begin
     LToolInfo := TMCPToolInfo.Create;
     try
       LToolInfo.Name := LDef.Name;
-      WarnOnProviderHostileToolName(LToolInfo.Name);
+      CheckToolName(LToolInfo.Name);
       LToolInfo.Description := LDef.Description;
       LToolInfo.ProviderClass := nil;
       LToolInfo.RttiMethod := nil;
@@ -366,7 +484,6 @@ begin
       LToolInfo.Free;
       raise;
     end;
-    LogI('MCP: Registered dynamic tool "' + LDef.Name + '"');
   end;
   FDynamicProviders.Add(AProvider); // take ownership
 end;
@@ -452,7 +569,7 @@ begin
     LToolInfo := TMCPToolInfo.Create;
     try
       LToolInfo.Name := LToolAttr.Name;
-      WarnOnProviderHostileToolName(LToolInfo.Name);
+      CheckToolName(LToolInfo.Name);
       LToolInfo.Description := LToolAttr.Description;
       LToolInfo.ProviderClass := AProviderClass;
       LToolInfo.RttiMethod := LMethod;
@@ -499,8 +616,6 @@ begin
       raise;
     end;
 
-    LogI('MCP: Registered tool "' + LToolAttr.Name + '" with ' +
-      IntToStr(Length(LRttiParams)) + ' param(s)');
   end;
 end;
 
@@ -685,13 +800,6 @@ begin
           LInfo.Free;
           raise;
         end;
-        if LInfo.IsTemplate then
-          LogI('MCP: Registered resource template "' + LResAttr.Name +
-            '" (' + LResAttr.URI + ') with ' +
-            IntToStr(Length(LInfo.VariableNames)) + ' variable(s)')
-        else
-          LogI('MCP: Registered resource "' + LResAttr.Name +
-            '" (' + LResAttr.URI + ')');
       end;
     end;
   end;
@@ -753,7 +861,6 @@ begin
       LInfo.Free;
       raise;
     end;
-    LogI('MCP: Registered prompt "' + LPromptAttr.Name + '"');
   end;
 end;
 
@@ -766,6 +873,7 @@ begin
   inherited Create;
   FServer := AServer;
   FHandler := TMCPRequestHandler.Create(AServer);
+  AServer.LogRegistrySummaryOnce;
 end;
 
 destructor TMCPEndpoint.Destroy;
@@ -776,10 +884,34 @@ end;
 
 { --- Hooks --- }
 
+function CallerFromContext(const AContext: TWebContext): TMCPCaller;
+begin
+  Result := Default(TMCPCaller);
+  Result.Transport := TMCPTransportKind.Http;
+  // UserName, not IsValid: IsValid also needs LoggedSince (the optional iat claim).
+  if AContext.LoggedUserExists and not AContext.LoggedUser.UserName.IsEmpty then
+  begin
+    Result.UserName := AContext.LoggedUser.UserName;
+    Result.Roles := AContext.LoggedUser.Roles.ToArray;
+  end;
+end;
+
 procedure TMCPEndpoint.OnBeforeRoutingHook(const Context: TWebContext; const JSON: TJDOJsonObject);
 var
   LMethod: string;
 begin
+  { Fail closed: a guard is installed but this request never went through it
+    (403), or the guard left authentication to the application and nobody
+    authenticated the request (401). Nothing is looked up or dispatched; the
+    method is replaced by one that does not exist and OnAfterCallHook turns
+    the outcome into the refusal. }
+  FRefusedStatus := MCPRefusalStatus(Context);
+  if FRefusedStatus <> 0 then
+  begin
+    JSON.S[JSONRPC_METHOD] := '__mcp_request_not_vetted_by_guard__';
+    Exit;
+  end;
+
   LMethod := JSON.S[JSONRPC_METHOD];
   JSON.S[JSONRPC_METHOD] := LMethod.Replace('/', '');
 
@@ -791,6 +923,7 @@ begin
     after initialize. }
   FSessionId := Context.Request.Headers[MCP_SESSION_HEADER];
   FHandler.SessionId := FSessionId;
+  FHandler.Caller := CallerFromContext(Context);
 
   { Validation is skipped only for methods that can legitimately arrive
     without a session: `initialize` creates one, and
@@ -811,6 +944,24 @@ end;
 
 procedure TMCPEndpoint.OnAfterCallHook(const Context: TWebContext; const JSONResponse: TJDOJsonObject);
 begin
+  if FRefusedStatus <> 0 then
+  begin
+    Context.Response.StatusCode := FRefusedStatus;
+    if FRefusedStatus = HTTP_STATUS.Unauthorized then
+      Context.Response.SetCustomHeader('WWW-Authenticate', 'Bearer');
+    if Assigned(JSONResponse) then
+    begin
+      JSONResponse.Clear;
+      JSONResponse.S['jsonrpc'] := '2.0';
+      JSONResponse.O['error'].I['code'] := -32600;
+      if FRefusedStatus = HTTP_STATUS.Unauthorized then
+        JSONResponse.O['error'].S['message'] := 'Unauthorized'
+      else
+        JSONResponse.O['error'].S['message'] := 'Forbidden';
+    end;
+    Exit;
+  end;
+
   { Set session header on every response }
   if not FSessionId.IsEmpty then
     Context.Response.SetCustomHeader(MCP_SESSION_HEADER, FSessionId);
@@ -930,7 +1081,16 @@ procedure TMCPSessionController.DestroySession;
 var
   LSessionId: string;
   LErr: TJDOJsonObject;
+  LStatus: Integer;
 begin
+  LStatus := MCPRefusalStatus(Context);
+  if LStatus <> 0 then
+  begin
+    if LStatus = HTTP_STATUS.Unauthorized then
+      Context.Response.SetCustomHeader('WWW-Authenticate', 'Bearer');
+    ResponseStatus(LStatus);
+    Exit;
+  end;
   LSessionId := Context.Request.Headers[MCP_SESSION_HEADER];
   if LSessionId.IsEmpty then
   begin

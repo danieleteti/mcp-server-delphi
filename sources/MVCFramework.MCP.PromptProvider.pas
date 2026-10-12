@@ -27,7 +27,7 @@ unit MVCFramework.MCP.PromptProvider;
 interface
 
 uses
-  JsonDataObjects, System.SysUtils;
+  JsonDataObjects, System.SysUtils, MVCFramework.MCP.Types;
 
 type
   TMCPPromptMessage = record
@@ -50,7 +50,11 @@ type
   end;
 
   TMCPPromptProvider = class
+  private
+    FCaller: TMCPCaller;
   public
+    { Set by the transport before the method is invoked. }
+    property Caller: TMCPCaller read FCaller write FCaller;
     constructor Create; virtual;
     destructor Destroy; override;
   end;

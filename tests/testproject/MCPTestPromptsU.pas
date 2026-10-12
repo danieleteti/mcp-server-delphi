@@ -49,12 +49,16 @@ type
     [MCPPromptArg('sourceLang', 'Source language', TMCPParamPresence.Optional)]
     [MCPPromptArg('targetLang', 'Target language', TMCPParamPresence.Required)]
     function Translate(const Arguments: TJDOJsonObject): TMCPPromptResult;
+
+    [MCPPrompt('whoami', 'Returns the caller as the provider sees it')]
+    function WhoAmI(const Arguments: TJDOJsonObject): TMCPPromptResult;
   end;
 
 implementation
 
 uses
   System.SysUtils,
+  MVCFramework.MCP.Types,
   MVCFramework.MCP.Server;
 
 { TTestPrompts }
@@ -117,6 +121,15 @@ begin
       PromptMessage('assistant',
         'Here is the translation:')
     ]);
+end;
+
+function TTestPrompts.WhoAmI(const Arguments: TJDOJsonObject): TMCPPromptResult;
+const
+  TRANSPORT: array [TMCPTransportKind] of string = ('http', 'stdio');
+begin
+  Result := TMCPPromptResult.Create('Caller',
+    [PromptMessage('user',
+      TRANSPORT[Caller.Transport] + '|' + Caller.UserName + '|' + string.Join(',', Caller.Roles))]);
 end;
 
 initialization

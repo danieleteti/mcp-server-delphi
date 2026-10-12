@@ -29,6 +29,7 @@ uses
   System.SysUtils, System.Classes, System.Generics.Collections,
   System.Net.HttpClient, System.TypInfo,
   MVCFramework,
+  MVCFramework.Commons,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.ToolProvider,
   JsonDataObjects;
@@ -53,9 +54,33 @@ type
     Description: string;
     HTTPMethod: string;
     PathTemplate: string;
+    HTTPMethods: TMVCHTTPMethods;   // every verb the action answers
+    ControllerClass: TClass;
     ControllerClassName: string;
     Params: TArray<TMCPBridgeParamInfo>;
     destructor Destroy; override;
+  end;
+
+  TMCPBridgeOptions = record
+  private
+    FOnlyControllers: TArray<TClass>;
+    FExcludedMethods: TMVCHTTPMethods;
+    FExcludedPaths: TArray<string>;
+    FHeaders: TArray<TPair<string, string>>;
+  public
+    class function Create: TMCPBridgeOptions; static;
+    function OnlyControllers(const AControllers: array of TClass): TMCPBridgeOptions;
+    function ExcludeMethods(const AMethods: TMVCHTTPMethods): TMCPBridgeOptions;
+    { ARegEx is matched, case-insensitively, against the path built from the
+      MVCPath attributes of the controller and of the action only. That path
+      does not include the engine's path prefix, nor a custom URL segment given
+      at AddController: with the prefix '/api', '^/api/admin/' excludes nothing;
+      write '^/admin/'. }
+    function ExcludePath(const ARegEx: string): TMCPBridgeOptions;
+    function Header(const AName, AValue: string): TMCPBridgeOptions;
+    { True when the route survives the options. Order: controllers, verbs, paths. }
+    function Accepts(ARoute: TMCPBridgeRouteInfo): Boolean;
+    property Headers: TArray<TPair<string, string>> read FHeaders;
   end;
 
   TMCPEngineScanner = class
@@ -72,15 +97,18 @@ type
   TMCPBridgeProvider = class(TMCPToolProvider)
   private
     FBaseURL: string;
+    FHeaders: TArray<TPair<string, string>>;
     FRoutes: TObjectList<TMCPBridgeRouteInfo>;
     function FindRoute(const AToolName: string): TMCPBridgeRouteInfo;
     function BuildURL(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
     function BuildQueryString(ARoute: TMCPBridgeRouteInfo; AArguments: TJDOJsonObject): string;
   public
-    constructor Create(const ABaseURL: string); reintroduce;
+    constructor Create(const ABaseURL: string;
+      const AHeaders: TArray<TPair<string, string>> = nil); reintroduce;
     destructor Destroy; override;
     procedure AddRoute(ARoute: TMCPBridgeRouteInfo);
     property Routes: TObjectList<TMCPBridgeRouteInfo> read FRoutes;
+    property BaseURL: string read FBaseURL;
     function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; override;
     function InvokeDynamic(const AToolName: string; AArguments: TJDOJsonObject): TMCPToolResult; override;
   end;
@@ -98,14 +126,17 @@ type
 
   TMCPServerBridgeHelper = class helper for TMCPServer
   public
-    procedure RegisterFromEngine(AEngine: TMVCEngine; const ABaseURL: string);
+    procedure RegisterFromEngine(AEngine: TMVCEngine; const ABaseURL: string); overload;
+    procedure RegisterFromEngine(AEngine: TMVCEngine; const ABaseURL: string;
+      const AOptions: TMCPBridgeOptions); overload;
     procedure GenerateProviderUnit(const AOutputPath: string);
   end;
 
 implementation
 
 uses
-  System.IOUtils, System.Rtti, System.NetEncoding,
+  System.IOUtils, System.Rtti, System.NetEncoding, System.RegularExpressions,
+  MVCFramework.JSONRPC, MVCFramework.SysControllers,
   System.Net.URLClient, System.NetConsts, MVCFramework.Logger,
   MVCFramework.MCP.Types;
 
@@ -114,6 +145,63 @@ uses
 destructor TMCPBridgeRouteInfo.Destroy;
 begin
   inherited;
+end;
+
+{ TMCPBridgeOptions }
+
+class function TMCPBridgeOptions.Create: TMCPBridgeOptions;
+begin
+  Result := Default(TMCPBridgeOptions);
+end;
+
+function TMCPBridgeOptions.OnlyControllers(const AControllers: array of TClass): TMCPBridgeOptions;
+var
+  LClass: TClass;
+begin
+  Result := Self;
+  for LClass in AControllers do
+    Result.FOnlyControllers := Result.FOnlyControllers + [LClass];
+end;
+
+function TMCPBridgeOptions.ExcludeMethods(const AMethods: TMVCHTTPMethods): TMCPBridgeOptions;
+begin
+  Result := Self;
+  Result.FExcludedMethods := Result.FExcludedMethods + AMethods;
+end;
+
+function TMCPBridgeOptions.ExcludePath(const ARegEx: string): TMCPBridgeOptions;
+begin
+  Result := Self;
+  Result.FExcludedPaths := Result.FExcludedPaths + [ARegEx];
+end;
+
+function TMCPBridgeOptions.Header(const AName, AValue: string): TMCPBridgeOptions;
+begin
+  Result := Self;
+  Result.FHeaders := Result.FHeaders + [TPair<string, string>.Create(AName, AValue)];
+end;
+
+function TMCPBridgeOptions.Accepts(ARoute: TMCPBridgeRouteInfo): Boolean;
+var
+  LClass: TClass;
+  LFound: Boolean;
+  LPattern: string;
+begin
+  if Length(FOnlyControllers) > 0 then
+  begin
+    LFound := False;
+    for LClass in FOnlyControllers do
+      if ARoute.ControllerClass = LClass then
+        LFound := True;
+    if not LFound then
+      Exit(False);
+  end;
+  if ARoute.HTTPMethods * FExcludedMethods <> [] then
+    Exit(False);
+  for LPattern in FExcludedPaths do
+    if TRegEx.IsMatch(ARoute.PathTemplate, LPattern, [roIgnoreCase]) then
+      Exit(False);
+  Result := True;
 end;
 
 { TMCPEngineScanner }
@@ -245,6 +333,13 @@ begin
       LRttiType := LCtx.GetType(LDelegate.Clazz);
       if LRttiType = nil then Continue;
 
+      // Never bridged: the system controller trusts loopback callers and a
+      // bridged call always comes from loopback; the other two are MCP itself.
+      if LDelegate.Clazz.InheritsFrom(TMVCSystemController) or
+         LDelegate.Clazz.InheritsFrom(TMVCJSONRPCController) or
+         LDelegate.Clazz.InheritsFrom(TMCPSessionController) then
+        Continue;
+
       LBasePath := '';
       for LAttr in LRttiType.GetAttributes do
         if LAttr is MVCPathAttribute then
@@ -308,6 +403,8 @@ begin
           LRoute.ToolName            := LToolName;
           LRoute.HTTPMethod          := LHTTPMethod;
           LRoute.PathTemplate        := LFullPath;
+          LRoute.HTTPMethods         := LMethodAttr.MVCHTTPMethods;
+          LRoute.ControllerClass     := LDelegate.Clazz;
           LRoute.ControllerClassName := LRttiType.Name;
           if LDocAttr <> nil then
             LRoute.Description := LDocAttr.Value
@@ -384,10 +481,12 @@ end;
 
 { TMCPBridgeProvider }
 
-constructor TMCPBridgeProvider.Create(const ABaseURL: string);
+constructor TMCPBridgeProvider.Create(const ABaseURL: string;
+  const AHeaders: TArray<TPair<string, string>>);
 begin
   inherited Create;
   FBaseURL := ABaseURL;
+  FHeaders := AHeaders;
   FRoutes := TObjectList<TMCPBridgeRouteInfo>.Create(True);
 end;
 
@@ -505,6 +604,7 @@ var
   LHasBody: Boolean;
   LBodyContent: string;
   LHttpClient: THTTPClient;
+  LHeader: TPair<string, string>;
 begin
   LRoute := FindRoute(AToolName);
   if LRoute = nil then
@@ -525,7 +625,10 @@ begin
 
   LHttpClient := THTTPClient.Create;
   LHttpClient.ContentType := 'application/json';
-  LHttpClient.Accept := 'application/json';
+  // "*/*": the router answers 404 to an action whose MVCProduces is not in Accept
+  LHttpClient.Accept := 'application/json, */*';
+  for LHeader in FHeaders do
+    LHttpClient.CustomHeaders[LHeader.Key] := LHeader.Value;
   try
     LBodyStream := nil;
     if LHasBody then
@@ -856,36 +959,80 @@ end;
 { TMCPServerBridgeHelper }
 
 procedure TMCPServerBridgeHelper.RegisterFromEngine(AEngine: TMVCEngine; const ABaseURL: string);
+begin
+  RegisterFromEngine(AEngine, ABaseURL, TMCPBridgeOptions.Create);
+end;
+
+procedure TMCPServerBridgeHelper.RegisterFromEngine(AEngine: TMVCEngine;
+  const ABaseURL: string; const AOptions: TMCPBridgeOptions);
 var
   LScanner: TMCPEngineScanner;
   LRoutes: TArray<TMCPBridgeRouteInfo>;
   LProvider: TMCPBridgeProvider;
+  LExisting: TMCPToolProvider;
   LRoute: TMCPBridgeRouteInfo;
+  LExposed, LDropped, LNext, I: Integer;
 begin
   if ABaseURL.IsEmpty then
     raise EMCPBridgeException.Create(
       'MCPBridge.RegisterFromEngine: ABaseURL must not be empty');
 
-  LScanner := TMCPEngineScanner.Create(AEngine);
+  // The whole sequence is one critical section: on the WebBroker host the
+  // configuration procedure runs once per web module, on request threads, so
+  // two first requests can arrive here together.
+  TMonitor.Enter(Self);
   try
-    LRoutes := LScanner.Scan;
+    // One bridge per process and base URL: hosts that build an engine per
+    // worker call the configuration procedure more than once.
+    for LExisting in Self.DynamicProviders do
+      if (LExisting is TMCPBridgeProvider) and
+         SameText(TMCPBridgeProvider(LExisting).BaseURL, ABaseURL) then
+        Exit;
+
+    LScanner := TMCPEngineScanner.Create(AEngine);
+    try
+      LRoutes := LScanner.Scan;
+    finally
+      LScanner.Free;
+    end;
+
+    LExposed := 0;
+    LDropped := 0;
+    LNext := 0; // first route not yet handed to the provider or freed
+    LProvider := TMCPBridgeProvider.Create(ABaseURL, AOptions.Headers);
+    try
+      while LNext < Length(LRoutes) do
+      begin
+        LRoute := LRoutes[LNext];
+        if AOptions.Accepts(LRoute) then
+        begin
+          LProvider.AddRoute(LRoute);
+          Inc(LExposed);
+        end
+        else
+        begin
+          LRoute.Free;
+          Inc(LDropped);
+        end;
+        Inc(LNext);
+      end;
+      // TMCPServer takes ownership of LProvider (and transitively of the routes inside it)
+      Self.RegisterDynamicProvider(LProvider);
+    except
+      // Accepts can raise (invalid ExcludePath pattern): free what the provider
+      // does not own yet.
+      for I := LNext to High(LRoutes) do
+        LRoutes[I].Free;
+      LProvider.Free;
+      raise;
+    end;
+
+    Self.AddSummaryLine(Format('MCP bridge: %d action(s) exposed, %d dropped', [LExposed, LDropped]));
+    if not Self.ServerName.Contains('[bootstrap proxy') then
+      Self.ServerName := Self.ServerName + ' [bootstrap proxy — not for production]';
   finally
-    LScanner.Free;
+    TMonitor.Exit(Self);
   end;
-
-  LProvider := TMCPBridgeProvider.Create(ABaseURL);
-  try
-    for LRoute in LRoutes do
-      LProvider.AddRoute(LRoute);
-    // TMCPServer takes ownership of LProvider (and transitively of the routes inside it)
-    Self.RegisterDynamicProvider(LProvider);
-  except
-    LProvider.Free;
-    raise;
-  end;
-
-  if not Self.ServerName.Contains('[bootstrap proxy') then
-    Self.ServerName := Self.ServerName + ' [bootstrap proxy — not for production]';
 end;
 
 procedure TMCPServerBridgeHelper.GenerateProviderUnit(const AOutputPath: string);

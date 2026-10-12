@@ -97,3 +97,10 @@ modules/
 **/bin/.env
 **/bin/.env.test
 **/bin/.env.prod
+
+# Build outputs of the test projects (same set as tests/testproject/.gitignore)
+/tests/logorder/Win32/
+/tests/logorder/Win64/
+/tests/logorder/__history/
+/tests/logorder/__recovery/
+/tests/logorder/bin/logs/

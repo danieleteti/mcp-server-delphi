@@ -26,6 +26,7 @@ Usage:
     python test_mcp_server_stdio.py
     python test_mcp_server_stdio.py --cmd /path/to/server.exe
     python test_mcp_server_stdio.py --cmd /path/to/server.exe --transport stdio --verbose
+    python test_mcp_server_stdio.py --cmd /path/to/server.exe --server-independent
 """
 
 import argparse
@@ -459,6 +460,31 @@ def test_tools_list(client: MCPStdioClient, result: TestResult) -> None:
                 result.fail(f"tool schema: {name}", "Missing 'properties'")
             else:
                 result.ok(f"tool structure: {name} OK")
+
+
+def test_caller_on_stdio(client: "MCPStdioClient", result: TestResult) -> None:
+    print("\n--- Caller identity (stdio) ---")
+    body = client.call_tool("whoami", {})
+    text = (body or {}).get("result", {}).get("content", [{}])[0].get("text")
+    if text == "stdio||":
+        result.ok("stdio: transport is stdio, no user")
+    else:
+        result.fail("whoami on stdio", str(body)[:160])
+
+    body = client.rpc_request("resources/read", {"uri": "caller://whoami"})
+    text = (body or {}).get("result", {}).get("contents", [{}])[0].get("text")
+    if text == "stdio||":
+        result.ok("stdio: a resource sees transport stdio, no user")
+    else:
+        result.fail("caller resource on stdio", str(body)[:160])
+
+    body = client.rpc_request("prompts/get", {"name": "whoami"})
+    text = (((body or {}).get("result", {}).get("messages") or [{}])[0]
+            .get("content", {}).get("text"))
+    if text == "stdio||":
+        result.ok("stdio: a prompt sees transport stdio, no user")
+    else:
+        result.fail("caller prompt on stdio", str(body)[:160])
 
 
 # --- Text tools ---------------------------------------------------------
@@ -974,6 +1000,19 @@ def test_resources(client: MCPStdioClient, result: TestResult) -> None:
         result.ok("resources/read: unknown URI returns error")
 
 
+def test_resource_templates_list(client: MCPStdioClient, result: TestResult) -> None:
+    print("\n--- Resource Templates List ---")
+    body = assert_jsonrpc(result, "resources/templates/list: success",
+                          client.rpc_request("resources/templates/list"))
+    if body:
+        tmpl = body["result"].get("resourceTemplates")
+        if isinstance(tmpl, list):
+            result.ok(f"resources/templates/list: returned array (length {len(tmpl)})")
+        else:
+            result.fail("resources/templates/list",
+                        f"Expected 'resourceTemplates' array, got {type(tmpl).__name__}")
+
+
 # --- Prompts -----------------------------------------------------------
 
 def test_prompts(client: MCPStdioClient, result: TestResult) -> None:
@@ -1349,6 +1388,23 @@ def test_string_id_preserved_in_response(client: MCPStdioClient, result: TestRes
                     f"Expected id='{str_id}', got {body.get('id')!r}")
 
 
+def test_utf8_string_id(client: MCPStdioClient, result: TestResult) -> None:
+    """Server-independent UTF-8 case: a string id with accented letters, the
+    euro sign, a CJK character and an emoji must come back unchanged. It needs
+    no tool of the library's own test server, so it also runs against any
+    other stdio server."""
+    print("\n--- UTF-8 string id (any server) ---")
+    utf8_id = "id-\u00e0\u00e9\u00ee\u00f5\u00fc-\u20ac-\u65e5-\U0001f680"
+    client.send({"jsonrpc": "2.0", "id": utf8_id, "method": "ping"})
+    body = client.recv(timeout=DEFAULT_TIMEOUT)
+    if body is None:
+        result.fail("utf8 id: response", "No response received")
+    elif body.get("id") == utf8_id and "result" in body:
+        result.ok("utf8 id: ping answered with the identical id")
+    else:
+        result.fail("utf8 id: id mismatch", f"Expected {utf8_id!r}, got {body!r}")
+
+
 def test_fresh_process_pre_init_ping(cmd: list[str], verbose: bool,
                                      result: TestResult) -> None:
     """Spin up a fresh subprocess and call `ping` BEFORE initialize.
@@ -1374,6 +1430,45 @@ def test_fresh_process_pre_init_ping(cmd: list[str], verbose: bool,
         fresh.stop()
 
 
+def test_registration_does_not_reach_stdout(probe_exe: str, verbose: bool,
+                                            result: TestResult) -> None:
+    """A provider unit initialised before any logging unit must not make the
+    default logger write registration lines to stdout."""
+    print("\n--- Registration and stdout ---")
+    if not os.path.isfile(probe_exe):
+        result.fail("log-order probe", f"not built: {probe_exe}")
+        return
+    proc = subprocess.Popen([probe_exe], cwd=os.path.dirname(probe_exe),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                          "params": {"protocolVersion": MCP_PROTOCOL_VERSION,
+                                     "capabilities": {},
+                                     "clientInfo": {"name": "probe", "version": "1"}}})
+    try:
+        out, _ = proc.communicate(request + "\n", timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        result.fail("log-order probe", "did not finish within 15 s (killed)")
+        return
+    lines = [l for l in out.splitlines() if l.strip()]
+    if verbose:
+        print(f"  stdout: {lines}")
+    if len(lines) != 1:
+        result.fail("stdout carries one line", f"got {len(lines)}: {lines[:3]}")
+        return
+    try:
+        body = json.loads(lines[0])
+    except json.JSONDecodeError:
+        result.fail("stdout line is JSON-RPC", lines[0][:120])
+        return
+    if body.get("id") == 1 and "result" in body:
+        result.ok("registration wrote nothing to stdout")
+    else:
+        result.fail("initialize answered", str(body)[:120])
+
+
 # --- Main ------------------------------------------------------------
 
 def main() -> None:
@@ -1383,6 +1478,18 @@ def main() -> None:
         "--cmd", default=None,
         help=f"Server command (default: {DEFAULT_EXE} --transport stdio). "
              "Pass the full command line - quoted paths are supported.")
+    parser.add_argument(
+        "--probe", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "logorder", "bin", "LogOrderProbe.exe"),
+        help="Log-order probe executable")
+    parser.add_argument(
+        "--server-independent", action="store_true",
+        help="Run only the cases that do not depend on the providers of the "
+             "library's own test server: handshake, protocol-version "
+             "negotiation, ping, id echo (integer, string and non-ASCII "
+             "string), JSON-RPC error codes, empty and invalid input, "
+             "stdout purity, and the tools/resources/prompts lists. "
+             "For any stdio MCP server.")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Print each JSON-RPC request and response")
@@ -1409,8 +1516,14 @@ def main() -> None:
 
     result = TestResult()
 
+    # Cases marked "dependent" name a tool, resource or prompt of the library's
+    # own test server (or probe program); --server-independent skips them.
+    dependent = not args.server_independent
+
     # Fresh-process test runs first (independent subprocess).
     test_fresh_process_pre_init_ping(cmd, args.verbose, result)
+    if dependent:
+        test_registration_does_not_reach_stdout(args.probe, args.verbose, result)
 
     # Main session
     client = MCPStdioClient(cmd, verbose=args.verbose)
@@ -1426,19 +1539,23 @@ def main() -> None:
         test_protocol_version_mismatch(client, result)
         test_capabilities_reflect_providers(client, result)
         test_ping(client, result)
-        test_response_id_matches_request(client, result)
+        test_response_id_matches_request(client, result)  # unknown tool name: any server errors
 
         test_tools_list(client, result)
-        test_text_tools(client, result)
-        test_utf8_roundtrip(client, result)
-        test_numeric_tools(client, result)
-        test_serialization_tools(client, result)
-        test_content_type_tools(client, result)
-        test_error_tools(client, result)
-        test_tools_call_errors(client, result)
+        if dependent:
+            test_caller_on_stdio(client, result)      # whoami, resource, prompt
+            test_text_tools(client, result)           # reverse_string, echo, ...
+            test_utf8_roundtrip(client, result)       # echo
+            test_numeric_tools(client, result)
+            test_serialization_tools(client, result)
+            test_content_type_tools(client, result)
+            test_error_tools(client, result)
+            test_tools_call_errors(client, result)    # reverse_string
 
-        test_resources(client, result)
-        test_prompts(client, result)
+            test_resources(client, result)            # config://, user://, ...
+        test_resource_templates_list(client, result)
+        if dependent:
+            test_prompts(client, result)              # code_review
 
         test_batch_request_returns_error(client, result)
         test_non_object_json_returns_parse_error(client, result)
@@ -1450,12 +1567,14 @@ def main() -> None:
         test_tools_list_returns_array(client, result)
         test_resources_list_returns_array(client, result)
         test_prompts_list_returns_array(client, result)
-        test_tools_call_simple_text(client, result)
+        if dependent:
+            test_tools_call_simple_text(client, result)   # test_simple_text
         test_unknown_method_returns_error(client, result)
         test_notification_produces_no_response(client, result)
         test_empty_lines_ignored(client, result)
         test_invalid_json_returns_parse_error(client, result)
         test_string_id_preserved_in_response(client, result)
+        test_utf8_string_id(client, result)
 
     finally:
         client.stop()

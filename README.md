@@ -6,7 +6,7 @@
 
    ### Server · Client · Agent — a full-stack MCP toolkit for [DMVCFramework](https://github.com/danieleteti/delphimvcframework)
 
-   [![Version](https://img.shields.io/badge/version-0.8.2-brightgreen.svg)](https://github.com/danieleteti/mcp-server-delphi)
+   [![Version](https://img.shields.io/badge/version-0.9.0-brightgreen.svg)](https://github.com/danieleteti/mcp-server-delphi)
    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
    [![Delphi](https://img.shields.io/badge/Delphi-11%2B-purple.svg)](https://www.embarcadero.com/products/delphi)
 
@@ -95,7 +95,7 @@
 
    ## Testing ✅
 
-   Extensively tested by four independent compliance suites: a Python HTTP suite (185 cases), a Python stdio suite (147 cases), a `TMCPClient` suite (21 Delphi cases, run over both HTTP and stdio), and a `TMCPOpenAIAgent` suite (30 Delphi cases driving the agent loop, and the SSE stream reassembly, against an embedded fake LLM). See the [documentation](https://www.danieleteti.it/mcp-server-delphi/) for how to build and run them.
+   Tested by five compliance suites: a Python HTTP suite (199 cases), a Python stdio suite (160 cases), a Python security suite (124 cases: the REST-to-MCP bridge filters, `MCPGuard`, the caller identity and a JWT middleware in front of `/mcp`; it starts the test server itself, once per configuration), a `TMCPClient` suite (21 Delphi cases, run over both HTTP and stdio), and a `TMCPOpenAIAgent` suite (32 Delphi cases driving the agent loop, and the SSE stream reassembly, against an embedded fake LLM). The stdio suite also runs against any other stdio MCP server with `--server-independent` (70 cases against the test server; it skips the cases that name a tool, resource or prompt of the library's own test server). See the [documentation](https://www.danieleteti.it/mcp-server-delphi/) for how to build and run them.
 
    ## Requirements
 

@@ -31,7 +31,7 @@ tests\run_all.bat     # starts the test server, then runs every suite and propag
 
 Six suites run: the Python HTTP compliance suite, the Python stdio suite, the Python security suite, the Delphi `TMCPClient` suite over HTTP and over stdio, and the `TMCPOpenAIAgent` suite driven by an embedded fake LLM.
 
-Last counts: HTTP 199, stdio 160, security 124, `TMCPClient` 21 (HTTP) and 21 (stdio), agent 32.
+Last counts: HTTP 200, stdio 160, security 124, `TMCPClient` 21 (HTTP) and 21 (stdio), agent 32.
 
 The security suite (`tests/test_mcp_security.py`) starts the test server itself, on port 8086, once per configuration. The configuration is chosen with flags read by `tests/testproject/TestFlagsU.pas` (`--auth-token`, `--jwt`, `--jwt-lax`, `--auth-elsewhere`, `--guard-path`, `--bridge-*`, ...).
 

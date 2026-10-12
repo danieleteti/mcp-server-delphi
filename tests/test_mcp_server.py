@@ -1546,6 +1546,13 @@ def test_pc2_session_error_code(client: MCPTestClient, result: TestResult):
         result.fail("PC-2: session error code",
                     f"Expected -32001, got {code}")
 
+    # the probe a 2026-07-28 client sends before falling back to initialize
+    probe = client.post({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover"}, False).json()
+    if probe.get("id") == "server-discover-probe-1" and probe.get("error", {}).get("code") == -32001:
+        result.ok("PC-2: the session error carries the id of the request")
+    else:
+        result.fail("PC-2: session error id", f"Expected the request id and -32001, got {probe}")
+
 
 # --- PC-1: Version negotiation ---
 

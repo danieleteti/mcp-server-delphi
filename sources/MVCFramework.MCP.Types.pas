@@ -30,8 +30,21 @@ uses
   JsonDataObjects;
 
 const
-  MCP_SERVER_LIBRARY_VERSION = '0.9.0';
+  MCP_SERVER_LIBRARY_VERSION = '0.10.0';
+  { Legacy era: initialize handshake and Mcp-Session-Id. }
   MCP_PROTOCOL_VERSION = '2025-03-26';
+  { Modern era (2026-07-28): stateless, version and capabilities travel in the
+    _meta of every request, no initialize, no session. Both eras are served
+    on the same endpoint and on stdio; the request decides (see
+    TMCPRequestHandler.PrepareRequest). }
+  MCP_PROTOCOL_VERSION_MODERN = '2026-07-28';
+  MCP_META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion';
+  MCP_META_CLIENT_INFO = 'io.modelcontextprotocol/clientInfo';
+  MCP_META_CLIENT_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities';
+  MCP_META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo';
+  MCP_ERR_HEADER_MISMATCH = -32020;
+  MCP_ERR_MISSING_CAPABILITY = -32021;
+  MCP_ERR_UNSUPPORTED_VERSION = -32022;
   MCP_ENDPOINT = '/mcp';
   { Set in TWebContext.Data by MCPGuard on every request it let through. The
     value says whether the guard authenticated the request itself (token, or

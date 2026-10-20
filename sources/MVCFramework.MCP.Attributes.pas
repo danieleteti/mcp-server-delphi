@@ -43,6 +43,29 @@ type
     property Description: string read FDescription;
   end;
 
+  { Human-readable name of a tool, shown by clients instead of the technical
+    name (spec 2025-06-18). Goes in the tool's "title" and "annotations.title". }
+  MCPToolTitleAttribute = class(TCustomAttribute)
+  private
+    FTitle: string;
+  public
+    constructor Create(const ATitle: string);
+    property Title: string read FTitle;
+  end;
+
+  { Tool annotations (hints for the client, not a security boundary: they come
+    from the server, so a client must not trust them from a server it does not
+    trust). Combine as needed on the tool method. }
+  { The tool does not change anything. A host can run it without asking. }
+  MCPReadOnlyAttribute = class(TCustomAttribute);
+  { The tool changes things but never deletes or overwrites (default is: it may). }
+  MCPNonDestructiveAttribute = class(TCustomAttribute);
+  { Calling it again with the same arguments has no further effect. }
+  MCPIdempotentAttribute = class(TCustomAttribute);
+  { The tool touches only this server's own data, not the open world
+    (the web, other systems). }
+  MCPClosedWorldAttribute = class(TCustomAttribute);
+
   { Placed on a method parameter to provide its MCP description and required flag.
     Name and type are discovered automatically from the Delphi parameter itself. }
   MCPParamAttribute = class(TCustomAttribute)
@@ -103,6 +126,14 @@ begin
   inherited Create;
   FName := AName;
   FDescription := ADescription;
+end;
+
+{ MCPToolTitleAttribute }
+
+constructor MCPToolTitleAttribute.Create(const ATitle: string);
+begin
+  inherited Create;
+  FTitle := ATitle;
 end;
 
 { MCPParamAttribute }

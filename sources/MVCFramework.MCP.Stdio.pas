@@ -216,6 +216,38 @@ begin
               E.Message.Replace('\', '\\').Replace('"', '\"') + '"},"id":null}');
           end;
         end;
+        on E: EMCPProtocolError do
+        begin
+          { Modern era: the error has its own code (unsupported version,
+            unknown tool, resource not found...) and may carry data. }
+          if LHasId then
+          begin
+            LErrorResponse := TJDOJsonObject.Create;
+            try
+              LErrorResponse.S['jsonrpc'] := '2.0';
+              LErrorResponse.O['error'].I['code'] := E.Code;
+              LErrorResponse.O['error'].S['message'] := E.Message;
+              if E.Data <> nil then
+                LErrorResponse.O['error'].O['data'] :=
+                  TJDOJsonObject.Parse(E.Data.ToJSON(False)) as TJDOJsonObject;
+              case LRequest.Types['id'] of
+                jdtString:
+                  LErrorResponse.S['id'] := LRequest.S['id'];
+                jdtInt:
+                  LErrorResponse.I['id'] := LRequest.I['id'];
+                jdtLong:
+                  LErrorResponse.L['id'] := LRequest.L['id'];
+              else
+                LErrorResponse.S['id'] := LRequest.S['id'];
+              end;
+              WriteResponse(LErrorResponse.ToJSON(True));
+            finally
+              LErrorResponse.Free;
+            end;
+          end
+          else
+            LogStderr('Protocol error on notification: ' + E.Message);
+        end;
         on E: Exception do
         begin
           if LHasId then

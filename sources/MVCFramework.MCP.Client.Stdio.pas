@@ -81,6 +81,8 @@ type
     FResponseTimeoutMs: Integer;
     FRecvBuf: TBytes;        // Bytes already read from stdout but not yet consumed.
     FInitialized: Boolean;
+    procedure InitializeLegacy;
+    procedure InitializeModern;
 
     procedure SpawnProcess;
     procedure CloseProcess;
@@ -396,6 +398,14 @@ var
 begin
   Result := nil;
 
+  // Modern era: every request carries its own version and capabilities.
+  if ModernActive and not ANotify then
+  begin
+    if not Assigned(AParams) then
+      AParams := TJSONObject.Create;
+    AddModernMeta(AParams);
+  end;
+
   LBody := TJSONObject.Create;
   try
     LBody.AddPair('jsonrpc', '2.0');
@@ -448,6 +458,71 @@ end;
 // ──────────────────────────────────────────────────────────────────────────
 
 procedure TMCPStdioClient.Initialize;
+begin
+  case FEra of
+    mpeLegacy:
+      begin
+        FActiveEra := mpeLegacy;
+        InitializeLegacy;
+      end;
+    mpeModern:
+      InitializeModern;
+  else
+    try
+      InitializeModern;
+    except
+      on E: Exception do
+      begin
+        // See TMCPClient.Initialize: a modern error is not a reason to fall back.
+        if IsModernProtocolError(E.Message) then
+          raise;
+        FActiveEra := mpeLegacy;
+        InitializeLegacy;
+      end;
+    end;
+  end;
+end;
+
+// Modern era: no handshake. server/discover checks the version and, on stdio,
+// is also the probe that makes a legacy server answer with an error.
+procedure TMCPStdioClient.InitializeModern;
+var
+  LResp, LResult: TJSONObject;
+  LVersions: TJSONArray;
+  LOK: Boolean;
+  I: Integer;
+begin
+  FActiveEra := mpeModern;
+  try
+    LResp := RPC('server/discover', TJSONObject.Create);
+    try
+      LOK := False;
+      if Assigned(LResp) then
+      begin
+        LResult := LResp.GetValue('result') as TJSONObject;
+        if Assigned(LResult) then
+        begin
+          LVersions := LResult.GetValue('supportedVersions') as TJSONArray;
+          if Assigned(LVersions) then
+            for I := 0 to LVersions.Count - 1 do
+              if LVersions.Items[I].Value = MCP_PROTOCOL_VERSION_MODERN then
+                LOK := True;
+        end;
+      end;
+      if not LOK then
+        raise Exception.Create('MCP server does not list protocol version ' +
+          MCP_PROTOCOL_VERSION_MODERN + ' in server/discover');
+    finally
+      LResp.Free;
+    end;
+    FInitialized := True;
+  except
+    FActiveEra := mpeLegacy;
+    raise;
+  end;
+end;
+
+procedure TMCPStdioClient.InitializeLegacy;
 var
   LParams, LCaps, LInfo, LResp: TJSONObject;
 begin

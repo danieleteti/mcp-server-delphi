@@ -34,6 +34,23 @@ type
   EMCPSessionError = class(Exception);
   EMCPInvalidRequest = class(Exception);
 
+  { A protocol-level failure with its JSON-RPC code. HTTPStatus is the status the
+    Streamable HTTP transport must answer with (0 = leave the transport default).
+    Data, when set, is the JSON-RPC error "data" member; the exception owns it. }
+  EMCPProtocolError = class(Exception)
+  private
+    FCode: Integer;
+    FHTTPStatus: Integer;
+    FData: TJDOJsonObject;
+  public
+    constructor Create(ACode, AHTTPStatus: Integer; const AMessage: string;
+      AData: TJDOJsonObject = nil);
+    destructor Destroy; override;
+    property Code: Integer read FCode;
+    property HTTPStatus: Integer read FHTTPStatus;
+    property Data: TJDOJsonObject read FData;
+  end;
+
   { -----------------------------------------------------------------------
     TMCPRequestHandler - transport-agnostic MCP protocol dispatch.
     Encapsulates all MCP method handling without any HTTP dependency.
@@ -44,6 +61,8 @@ type
     FServer: TObject;  { Actually TMCPServer; typed as TObject to avoid circular reference }
     FSessionId: string;
     FCaller: TMCPCaller;
+    FModern: Boolean;
+    function ListCacheScope: string;
   public
     constructor Create(AServer: TObject);
 
@@ -52,8 +71,23 @@ type
     function HandleRequest(ARequest: TJDOJsonObject): TJDOJsonObject;
 
     { Session validation: raises EMCPSessionError for non-initialize
-      methods when the session is missing or invalid. }
+      methods when the session is missing or invalid. Legacy era only. }
     procedure ValidateSession(const AMethod: string);
+
+    { Decides which era the request speaks and validates it.
+      Modern (params._meta carries io.modelcontextprotocol/protocolVersion):
+      the version must be supported and clientCapabilities must be present,
+      otherwise EMCPProtocolError; no session is looked at. Legacy (no such
+      key): ValidateSession. AParams may be nil. After the call Modern says
+      which era this request is in. }
+    procedure PrepareRequest(const AMethod: string; AParams: TJDOJsonObject);
+
+    { Modern era only: adds resultType, the serverInfo in _meta and, for the
+      cacheable results, ttlMs and cacheScope. Safe to call on any result. }
+    procedure DecorateResult(const AMethod: string; AResult: TJDOJsonObject);
+
+    { server/discover (modern era, but answered in both). }
+    function DoServerDiscover: TJDOJsonObject;
 
     { Individual MCP method handlers - public so transports can call them directly }
     function DoInitialize(AParams: TJDOJsonObject): TJDOJsonObject;
@@ -69,12 +103,13 @@ type
 
     property SessionId: string read FSessionId write FSessionId;
     property Caller: TMCPCaller read FCaller write FCaller;
+    property Modern: Boolean read FModern;
   end;
 
 implementation
 
 uses
-  System.TypInfo,
+  System.TypInfo, System.Generics.Collections, System.Generics.Defaults,
   MVCFramework.Logger,
   MVCFramework.MCP.Server,
   MVCFramework.MCP.ToolProvider,
@@ -82,12 +117,133 @@ uses
   MVCFramework.MCP.PromptProvider,
   MVCFramework.MCP.Session;
 
+{ EMCPProtocolError }
+
+constructor EMCPProtocolError.Create(ACode, AHTTPStatus: Integer;
+  const AMessage: string; AData: TJDOJsonObject);
+begin
+  inherited Create(AMessage);
+  FCode := ACode;
+  FHTTPStatus := AHTTPStatus;
+  FData := AData;
+end;
+
+destructor EMCPProtocolError.Destroy;
+begin
+  FData.Free;
+  inherited;
+end;
+
 { TMCPRequestHandler }
 
 constructor TMCPRequestHandler.Create(AServer: TObject);
 begin
   inherited Create;
   FServer := AServer;
+end;
+
+procedure TMCPRequestHandler.PrepareRequest(const AMethod: string;
+  AParams: TJDOJsonObject);
+var
+  LMeta: TJDOJsonObject;
+  LData: TJDOJsonObject;
+begin
+  FModern := False;
+
+  { The handshake methods belong to the legacy era whatever else the request carries. }
+  if SameText(AMethod, 'initialize') or
+     SameText(AMethod, 'notifications/initialized') then
+    Exit;
+
+  if (AParams <> nil) and AParams.Contains('_meta') and
+     (AParams.Types['_meta'] = jdtObject) and
+     AParams.O['_meta'].Contains(MCP_META_PROTOCOL_VERSION) then
+  begin
+    LMeta := AParams.O['_meta'];
+    if LMeta.S[MCP_META_PROTOCOL_VERSION] <> MCP_PROTOCOL_VERSION_MODERN then
+    begin
+      LData := TJDOJsonObject.Create;
+      LData.A['supported'].Add(MCP_PROTOCOL_VERSION_MODERN);
+      LData.A['supported'].Add(MCP_PROTOCOL_VERSION);
+      LData.S['requested'] := LMeta.S[MCP_META_PROTOCOL_VERSION];
+      raise EMCPProtocolError.Create(MCP_ERR_UNSUPPORTED_VERSION, 400,
+        'Unsupported protocol version', LData);
+    end;
+    if not (LMeta.Contains(MCP_META_CLIENT_CAPABILITIES) and
+            (LMeta.Types[MCP_META_CLIENT_CAPABILITIES] = jdtObject)) then
+      raise EMCPProtocolError.Create(-32602, 400,
+        'Invalid params: _meta.' + MCP_META_CLIENT_CAPABILITIES + ' is required');
+    FModern := True;
+    Exit;
+  end;
+
+  { No version in _meta: a legacy-era request, session rules apply. This
+    includes a server/discover without _meta, which is not a valid modern
+    request; the session error is what tells a client probing for the
+    modern era that it must fall back to initialize. }
+  ValidateSession(AMethod);
+end;
+
+function TMCPRequestHandler.ListCacheScope: string;
+begin
+  { What a list contains may depend on who asks (an authenticated caller):
+    shared caches must not keep it. }
+  if FCaller.UserName.IsEmpty then
+    Result := 'public'
+  else
+    Result := 'private';
+end;
+
+procedure TMCPRequestHandler.DecorateResult(const AMethod: string;
+  AResult: TJDOJsonObject);
+var
+  LInfo: TJDOJsonObject;
+  LServer: TMCPServer;
+  LTTL: Integer;
+begin
+  if AResult = nil then
+    Exit;
+  LServer := TMCPServer(FServer);
+  AResult.S['resultType'] := 'complete';
+
+  LInfo := AResult.O['_meta'].O[MCP_META_SERVER_INFO];
+  LInfo.S['name'] := LServer.ServerName;
+  LInfo.S['version'] := LServer.ServerVersion;
+
+  { CacheableResult: tools/list, prompts/list, resources/list,
+    resources/templates/list, resources/read (and server/discover). The
+    registry is fixed once the server serves, so lists may be kept; the
+    content of a resource is data and may change at any moment. }
+  if SameText(AMethod, 'resources/read') then
+    LTTL := 0
+  else if SameText(AMethod, 'tools/list') or SameText(AMethod, 'prompts/list') or
+          SameText(AMethod, 'resources/list') or
+          SameText(AMethod, 'resources/templates/list') or
+          SameText(AMethod, 'server/discover') then
+    LTTL := LServer.ListCacheTTLms
+  else
+    Exit;
+  AResult.I['ttlMs'] := LTTL;
+  AResult.S['cacheScope'] := ListCacheScope;
+end;
+
+function TMCPRequestHandler.DoServerDiscover: TJDOJsonObject;
+var
+  LServer: TMCPServer;
+  LCaps: TMCPCapabilities;
+begin
+  LServer := TMCPServer(FServer);
+  LCaps.SupportsTools := LServer.Tools.Count > 0;
+  LCaps.SupportsResources := LServer.Resources.Count > 0;
+  LCaps.SupportsPrompts := LServer.Prompts.Count > 0;
+
+  Result := TJDOJsonObject.Create;
+  Result.A['supportedVersions'].Add(MCP_PROTOCOL_VERSION_MODERN);
+  Result.A['supportedVersions'].Add(MCP_PROTOCOL_VERSION);
+  Result.O['capabilities'] := LCaps.ToJSON;
+  if not LServer.ServerInstructions.IsEmpty then
+    Result.S['instructions'] := LServer.ServerInstructions;
+  DecorateResult('server/discover', Result);
 end;
 
 procedure TMCPRequestHandler.ValidateSession(const AMethod: string);
@@ -127,14 +283,15 @@ begin
   LMethod := ARequest.S['method'];
   LHasId := ARequest.Contains('id');
 
-  { Session validation: all methods except initialize/ping require a valid session }
-  ValidateSession(LMethod);
-
   { Extract params object if present }
   if ARequest.Contains('params') and (ARequest.Types['params'] = jdtObject) then
     LParams := ARequest.O['params']
   else
     LParams := nil;
+
+  { Modern request: version and capabilities in _meta, no session. Legacy
+    request: every method except initialize needs a valid session. }
+  PrepareRequest(LMethod, LParams);
 
   { Dispatch to the correct handler }
   LResult := nil;
@@ -149,6 +306,8 @@ begin
   end
   else if SameText(LMethod, 'ping') then
     LResult := DoPing
+  else if SameText(LMethod, 'server/discover') then
+    LResult := DoServerDiscover
   else if SameText(LMethod, 'tools/list') then
     LResult := DoToolsList
   else if SameText(LMethod, 'tools/call') then
@@ -173,6 +332,8 @@ begin
       still get a proper -32601 / -32603 error envelope. }
     if not LHasId then
       Exit(nil);
+    if FModern then
+      raise EMCPProtocolError.Create(-32601, 404, 'Method not found: ' + LMethod);
     raise Exception.CreateFmt('Unknown method: %s', [LMethod]);
   end;
 
@@ -182,6 +343,9 @@ begin
     LResult.Free;
     Exit(nil);
   end;
+
+  if FModern then
+    DecorateResult(LMethod, LResult);
 
   { Build JSON-RPC response envelope }
   Result := TJDOJsonObject.Create;
@@ -274,18 +438,45 @@ var
   LServer: TMCPServer;
   LToolsArray: TJDOJsonArray;
   LToolInfo: TMCPToolInfo;
-  LToolObj: TJDOJsonObject;
+  LToolObj, LAnn: TJDOJsonObject;
+  LTools: TArray<TMCPToolInfo>;
 begin
   LServer := TMCPServer(FServer);
   Result := TJDOJsonObject.Create;
   LToolsArray := Result.A['tools'];
-  for LToolInfo in LServer.Tools.Values do
+  { Deterministic order (spec 2026-07-28: SHOULD): clients cache the list and
+    LLM providers cache the prompt that contains it. }
+  LTools := LServer.Tools.Values.ToArray;
+  TArray.Sort<TMCPToolInfo>(LTools, TComparer<TMCPToolInfo>.Construct(
+    function(const A, B: TMCPToolInfo): Integer
+    begin
+      Result := CompareText(A.Name, B.Name);
+    end));
+  for LToolInfo in LTools do
   begin
     LToolObj := LToolsArray.AddObject;
     LToolObj.S['name'] := LToolInfo.Name;
+    if not LToolInfo.Title.IsEmpty then
+      LToolObj.S['title'] := LToolInfo.Title;
     LToolObj.S['description'] := LToolInfo.Description;
     LToolObj.O['inputSchema'] :=
       TJDOJsonObject.Parse(LToolInfo.InputSchema.ToJSON(False)) as TJDOJsonObject;
+    { Hints for the client UI and for the policy of the host: a read-only tool
+      can be auto-approved, a destructive one needs a confirmation. }
+    if LToolInfo.HasAnnotations then
+    begin
+      LAnn := LToolObj.O['annotations'];
+      if not LToolInfo.Title.IsEmpty then
+        LAnn.S['title'] := LToolInfo.Title;
+      if LToolInfo.ReadOnly then
+        LAnn.B['readOnlyHint'] := True;
+      if LToolInfo.NonDestructive then
+        LAnn.B['destructiveHint'] := False;
+      if LToolInfo.Idempotent then
+        LAnn.B['idempotentHint'] := True;
+      if LToolInfo.ClosedWorld then
+        LAnn.B['openWorldHint'] := False;
+    end;
   end;
 end;
 
@@ -329,7 +520,11 @@ begin
     LArguments := nil;
 
   if not LServer.Tools.TryGetValue(LowerCase(LName), LToolInfo) then
+  begin
+    if FModern then
+      raise EMCPProtocolError.Create(-32602, 0, 'Unknown tool: ' + LName);
     raise Exception.CreateFmt('Tool not found: %s', [LName]);
+  end;
 
   { Validate required params (case-insensitive) }
   for I := 0 to High(LToolInfo.Params) do
@@ -495,6 +690,7 @@ var
   LValues: TArray<string>;
   LArgs: TArray<TValue>;
   I: Integer;
+  LNotFound: TJDOJsonObject;
 begin
   LServer := TMCPServer(FServer);
 
@@ -515,7 +711,17 @@ begin
   if not LServer.Resources.TryGetValue(LowerCase(LURI), LInfo) then
   begin
     if not FindMatchingTemplate(LServer, LURI, LInfo, LValues) then
+    begin
+      { 2026-07-28 replaced -32002 with -32602, uri in data. }
+      if FModern then
+      begin
+        LNotFound := TJDOJsonObject.Create;
+        LNotFound.S['uri'] := LURI;
+        raise EMCPProtocolError.Create(-32602, 0,
+          'Resource not found: ' + LURI, LNotFound);
+      end;
       raise Exception.Create('Resource not found: ' + LURI);
+    end;
   end
   else if LInfo.IsTemplate then
     // A literal hit on a template URI is meaningless: a URI like

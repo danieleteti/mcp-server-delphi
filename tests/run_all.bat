@@ -83,6 +83,19 @@ echo [6/6] Delphi TMCPOpenAIAgent compliance suite...
 SET AGENT_EXIT=%ERRORLEVEL%
 
 echo.
+echo [7/7] 2026-07-28 era: Python suite (HTTP + stdio) and Delphi client (modern, auto)...
+python "%TESTS_DIR%test_mcp_modern.py" --url %MCP_URL% --cmd "\"%TESTS_DIR%testproject\bin\MCPServerUnitTest.exe\" --transport stdio"
+SET MODERN_PY_EXIT=%ERRORLEVEL%
+"%TESTS_DIR%clientproject\bin\MCPClientTest.exe" --url %MCP_URL% --era modern
+SET MODERN_HTTP_EXIT=%ERRORLEVEL%
+"%TESTS_DIR%clientproject\bin\MCPClientTest.exe" --stdio-cmd "%TESTS_DIR%testproject\bin\MCPServerUnitTest.exe --transport stdio" --era modern
+SET MODERN_STDIO_EXIT=%ERRORLEVEL%
+"%TESTS_DIR%clientproject\bin\MCPClientTest.exe" --url %MCP_URL% --era auto
+SET AUTO_HTTP_EXIT=%ERRORLEVEL%
+"%TESTS_DIR%clientproject\bin\MCPClientTest.exe" --stdio-cmd "%TESTS_DIR%testproject\bin\MCPServerUnitTest.exe --transport stdio" --era auto
+SET AUTO_STDIO_EXIT=%ERRORLEVEL%
+
+echo.
 echo Stopping test server...
 taskkill /F /IM MCPServerUnitTest.exe >NUL 2>&1
 
@@ -94,6 +107,11 @@ echo Python suite (security)     : exit %PY_SEC_EXIT%
 echo TMCPClient suite (HTTP)     : exit %CLIENT_HTTP_EXIT%
 echo TMCPClient suite (stdio)    : exit %CLIENT_STDIO_EXIT%
 echo TMCPOpenAIAgent suite       : exit %AGENT_EXIT%
+echo 2026-07-28 Python suite    : exit %MODERN_PY_EXIT%
+echo TMCPClient modern (HTTP)    : exit %MODERN_HTTP_EXIT%
+echo TMCPClient modern (stdio)   : exit %MODERN_STDIO_EXIT%
+echo TMCPClient auto (HTTP)      : exit %AUTO_HTTP_EXIT%
+echo TMCPClient auto (stdio)     : exit %AUTO_STDIO_EXIT%
 echo ===========================================================
 
 if not "%PY_HTTP_EXIT%"=="0"     exit /b %PY_HTTP_EXIT%
@@ -102,6 +120,11 @@ if not "%PY_SEC_EXIT%"=="0"      exit /b %PY_SEC_EXIT%
 if not "%CLIENT_HTTP_EXIT%"=="0" exit /b %CLIENT_HTTP_EXIT%
 if not "%CLIENT_STDIO_EXIT%"=="0" exit /b %CLIENT_STDIO_EXIT%
 if not "%AGENT_EXIT%"=="0"       exit /b %AGENT_EXIT%
+if not "%MODERN_PY_EXIT%"=="0"    exit /b %MODERN_PY_EXIT%
+if not "%MODERN_HTTP_EXIT%"=="0"  exit /b %MODERN_HTTP_EXIT%
+if not "%MODERN_STDIO_EXIT%"=="0" exit /b %MODERN_STDIO_EXIT%
+if not "%AUTO_HTTP_EXIT%"=="0"    exit /b %AUTO_HTTP_EXIT%
+if not "%AUTO_STDIO_EXIT%"=="0"   exit /b %AUTO_STDIO_EXIT%
 echo ALL SUITES PASSED.
 endlocal
 exit /b 0

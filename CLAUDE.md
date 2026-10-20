@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 MCP (Model Context Protocol) Server for DMVCFramework, using the idiomatic `PublishObject` JSON-RPC pattern. Allows DMVCFramework applications to expose MCP tools, resources, and prompts via the `/mcp` endpoint.
 
 - **Language:** Object Pascal (Delphi 11+)
-- **Protocol:** MCP version 2025-03-26
+- **Protocol:** MCP 2026-07-28 and 2025-03-26 (dual-era, the request decides; see README "Protocol conformance")
 - **License:** Apache 2.0
 
 ## Build
@@ -31,7 +31,7 @@ tests\run_all.bat     # starts the test server, then runs every suite and propag
 
 Six suites run: the Python HTTP compliance suite, the Python stdio suite, the Python security suite, the Delphi `TMCPClient` suite over HTTP and over stdio, and the `TMCPOpenAIAgent` suite driven by an embedded fake LLM.
 
-Last counts: HTTP 200, stdio 160, security 124, `TMCPClient` 21 (HTTP) and 21 (stdio), agent 32.
+Last counts: HTTP 200, stdio 160, 2026-07-28 era 69 (HTTP + stdio, `tests/test_mcp_modern.py`), security 132, `TMCPClient` 21 each over HTTP and stdio and in the legacy, modern (`--era modern`) and auto eras, agent 32.
 
 The security suite (`tests/test_mcp_security.py`) starts the test server itself, on port 8086, once per configuration. The configuration is chosen with flags read by `tests/testproject/TestFlagsU.pas` (`--auth-token`, `--jwt`, `--jwt-lax`, `--auth-elsewhere`, `--guard-path`, `--bridge-*`, ...).
 

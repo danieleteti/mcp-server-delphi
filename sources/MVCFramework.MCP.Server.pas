@@ -54,10 +54,14 @@ type
     RttiMethod: TRttiMethod;
     Params: TArray<TMCPParamInfo>;
     InputSchema: TJDOJsonObject;
+    { Presentation hints, see MCPToolTitle / MCPReadOnly / ... }
+    Title: string;
+    ReadOnly, NonDestructive, Idempotent, ClosedWorld: Boolean;
     { Non-nil for dynamic tools (bridge proxy). When set, DoToolsCall calls
       HandlerInstance.InvokeDynamic instead of RTTI dispatch. Not owned here —
       ownership is in TMCPServer.FDynamicProviders. }
     HandlerInstance: TMCPToolProvider;
+    function HasAnnotations: Boolean;
     destructor Destroy; override;
   end;
 
@@ -131,6 +135,7 @@ type
     FSummaryExtra: TArray<string>;
     FSummaryWarnings: TArray<string>;
     FGuardInstalled: Boolean;
+    FListCacheTTLms: Integer;
 
     procedure AddSummaryWarning(const AText: string);
     procedure CheckToolName(const AName: string);
@@ -178,6 +183,10 @@ type
     property ServerName: string read FServerName write FServerName;
     property ServerVersion: string read FServerVersion write FServerVersion;
     property ServerInstructions: string read FServerInstructions write FServerInstructions;
+    { Modern era: how long a client may keep tools/list, prompts/list,
+      resources/list and server/discover (ttlMs). The registry is fixed once the
+      server serves, so the default is a minute; 0 = do not cache. }
+    property ListCacheTTLms: Integer read FListCacheTTLms write FListCacheTTLms;
     property SessionManager: IMCPSessionManager read FSessionManager;
     property Tools: TObjectDictionary<string, TMCPToolInfo> read FTools;
     property Resources: TObjectDictionary<string, TMCPResourceInfo> read FResources;
@@ -198,6 +207,16 @@ type
     FSessionId: string;
     FHandler: TMCPRequestHandler;
     FRefusedStatus: Integer;
+    { Modern era: the protocol error found before routing, answered in
+      OnAfterCallHook; the method that was asked (with its slash). }
+    FProtoError: Boolean;
+    FProtoCode: Integer;
+    FProtoStatus: Integer;
+    FProtoMessage: string;
+    FProtoData: TJDOJsonObject;
+    FMcpMethod: string;
+    procedure ValidateModernHeaders(const AContext: TWebContext;
+      const AMethod: string; AParams: TJDOJsonObject);
   public
     constructor Create(AServer: TMCPServer);
     destructor Destroy; override;
@@ -215,6 +234,7 @@ type
       [MVCJSONRPCRestParams] const ExtraParams: TJDOJsonArray): TJDOJsonObject;
     procedure NotificationsInitialized;
     function Ping: TJDOJsonObject;
+    function ServerDiscover: TJDOJsonObject;
     function ToolsList: TJDOJsonObject;
     function ToolsCall(const Name: string;
       [MVCJSONRPCOptional] const Arguments: TJDOJsonObject;
@@ -245,7 +265,7 @@ type
 implementation
 
 uses
-  System.Generics.Defaults, MVCFramework.Logger;
+  System.Generics.Defaults, System.NetEncoding, MVCFramework.Logger;
 
 { 0 when the request may be served; 403 when a guard is installed and this
   request never went through it; 401 when it did, the guard left
@@ -278,6 +298,12 @@ end;
 
 { TMCPToolInfo }
 
+function TMCPToolInfo.HasAnnotations: Boolean;
+begin
+  Result := (not Title.IsEmpty) or ReadOnly or NonDestructive or Idempotent or
+    ClosedWorld;
+end;
+
 destructor TMCPToolInfo.Destroy;
 begin
   InputSchema.Free;
@@ -293,6 +319,7 @@ begin
   inherited Create;
   FServerName    := 'MCPServer';
   FServerVersion := '1.0.0';
+  FListCacheTTLms := 60000;
   FTools := TObjectDictionary<string, TMCPToolInfo>.Create([doOwnsValues]);
   FResources := TObjectDictionary<string, TMCPResourceInfo>.Create([doOwnsValues]);
   FPrompts := TObjectDictionary<string, TMCPPromptInfo>.Create([doOwnsValues]);
@@ -573,6 +600,19 @@ begin
       LToolInfo.Description := LToolAttr.Description;
       LToolInfo.ProviderClass := AProviderClass;
       LToolInfo.RttiMethod := LMethod;
+      for LAttr in LMethod.GetAttributes do
+      begin
+        if LAttr is MCPToolTitleAttribute then
+          LToolInfo.Title := MCPToolTitleAttribute(LAttr).Title
+        else if LAttr is MCPReadOnlyAttribute then
+          LToolInfo.ReadOnly := True
+        else if LAttr is MCPNonDestructiveAttribute then
+          LToolInfo.NonDestructive := True
+        else if LAttr is MCPIdempotentAttribute then
+          LToolInfo.Idempotent := True
+        else if LAttr is MCPClosedWorldAttribute then
+          LToolInfo.ClosedWorld := True;
+      end;
 
       LRttiParams := LMethod.GetParameters;
       SetLength(LToolInfo.Params, Length(LRttiParams));
@@ -878,6 +918,7 @@ end;
 
 destructor TMCPEndpoint.Destroy;
 begin
+  FProtoData.Free;
   FHandler.Free;
   inherited;
 end;
@@ -899,6 +940,7 @@ end;
 procedure TMCPEndpoint.OnBeforeRoutingHook(const Context: TWebContext; const JSON: TJDOJsonObject);
 var
   LMethod: string;
+  LParams: TJDOJsonObject;
 begin
   { Fail closed: a guard is installed but this request never went through it
     (403), or the guard left authentication to the application and nobody
@@ -913,7 +955,12 @@ begin
   end;
 
   LMethod := JSON.S[JSONRPC_METHOD];
+  FMcpMethod := LMethod;
   JSON.S[JSONRPC_METHOD] := LMethod.Replace('/', '');
+  if JSON.Contains('params') and (JSON.Types['params'] = jdtObject) then
+    LParams := JSON.O['params']
+  else
+    LParams := nil;
 
   { Always capture the incoming session id. It is empty for the very first
     `initialize` call (that is how the client signals "give me a session")
@@ -925,21 +972,93 @@ begin
   FHandler.SessionId := FSessionId;
   FHandler.Caller := CallerFromContext(Context);
 
-  { Validation is skipped only for methods that can legitimately arrive
-    without a session: `initialize` creates one, and
-    `notifications/initialized` is the client's fire-and-forget ack. Every
-    other method - `ping` included - must carry a valid session or the
-    server replies with a JSON-RPC error. }
-  if not SameText(LMethod, 'initialize') and
-     not SameText(LMethod, 'notifications/initialized') then
-  begin
-    try
-      FHandler.ValidateSession(LMethod);
-    except
-      on E: EMCPSessionError do
-        raise EMVCJSONRPCError.Create(MCP_ERR_SESSION, E.Message);
+  { Modern request (2026-07-28): no session, version and capabilities in
+    params._meta, mirrored in the MCP-Protocol-Version / Mcp-Method / Mcp-Name
+    headers. Legacy request: validation is skipped only for methods that can
+    legitimately arrive without a session (`initialize` creates one,
+    `notifications/initialized` is its ack); every other method - `ping`
+    included - must carry a valid session or the server replies with a
+    JSON-RPC error. PrepareRequest does both. }
+  try
+    FHandler.PrepareRequest(LMethod, LParams);
+    if FHandler.Modern then
+      ValidateModernHeaders(Context, LMethod, LParams);
+  except
+    on E: EMCPSessionError do
+      raise EMVCJSONRPCError.Create(MCP_ERR_SESSION, E.Message);
+    on E: EMCPProtocolError do
+    begin
+      { Answered in OnAfterCallHook with the HTTP status the spec asks for;
+        nothing is dispatched. }
+      FProtoError := True;
+      FProtoCode := E.Code;
+      FProtoStatus := E.HTTPStatus;
+      FProtoMessage := E.Message;
+      if E.Data <> nil then
+        FProtoData := TJDOJsonObject.Parse(E.Data.ToJSON(False)) as TJDOJsonObject;
+      JSON.S[JSONRPC_METHOD] := '__mcp_protocol_error__';
+      Exit;
     end;
   end;
+
+  if FHandler.Modern then
+  begin
+    { No sessions in this era: an Mcp-Session-Id is ignored and never echoed.
+      _meta is not a parameter of the method: the dispatcher must not see it. }
+    FSessionId := '';
+    FHandler.SessionId := '';
+    LParams.Remove('_meta');
+  end;
+end;
+
+{ Spec 2026-07-28, Streamable HTTP, "Server Validation": the headers that
+  intermediaries route on must say what the body says. }
+procedure TMCPEndpoint.ValidateModernHeaders(const AContext: TWebContext;
+  const AMethod: string; AParams: TJDOJsonObject);
+
+  function Mismatch(const AMessage: string): EMCPProtocolError;
+  begin
+    Result := EMCPProtocolError.Create(MCP_ERR_HEADER_MISMATCH, 400,
+      'Header mismatch: ' + AMessage);
+  end;
+
+  { =?base64?...?= carries a value that is not plain ASCII. }
+  function DecodeHeader(const AValue: string): string;
+  begin
+    if AValue.StartsWith('=?base64?') and AValue.EndsWith('?=') then
+      Result := TEncoding.UTF8.GetString(TNetEncoding.Base64.DecodeStringToBytes(
+        Copy(AValue, 10, Length(AValue) - 11)))
+    else
+      Result := AValue;
+  end;
+
+var
+  LHeader, LExpected: string;
+begin
+  LHeader := AContext.Request.Headers['MCP-Protocol-Version'];
+  if LHeader <> MCP_PROTOCOL_VERSION_MODERN then
+    raise Mismatch('MCP-Protocol-Version is "' + LHeader + '", the body says "' +
+      MCP_PROTOCOL_VERSION_MODERN + '"');
+
+  LHeader := AContext.Request.Headers['Mcp-Method'];
+  if LHeader <> AMethod then
+    raise Mismatch('Mcp-Method is "' + LHeader + '", the body says "' + AMethod + '"');
+
+  LExpected := '';
+  if SameText(AMethod, 'tools/call') or SameText(AMethod, 'prompts/get') then
+    LExpected := AParams.S['name']
+  else if SameText(AMethod, 'resources/read') then
+    LExpected := AParams.S['uri']
+  else
+    Exit;
+  LHeader := AContext.Request.Headers['Mcp-Name'];
+  try
+    LHeader := DecodeHeader(LHeader);
+  except
+    raise Mismatch('Mcp-Name is not valid base64');
+  end;
+  if LHeader <> LExpected then
+    raise Mismatch('Mcp-Name is "' + LHeader + '", the body says "' + LExpected + '"');
 end;
 
 procedure TMCPEndpoint.OnAfterCallHook(const Context: TWebContext; const JSONResponse: TJDOJsonObject);
@@ -960,6 +1079,36 @@ begin
         JSONResponse.O['error'].S['message'] := 'Forbidden';
     end;
     Exit;
+  end;
+
+  if FProtoError then
+  begin
+    if FProtoStatus <> 0 then
+      Context.Response.StatusCode := FProtoStatus;
+    if Assigned(JSONResponse) then
+    begin
+      { Keep the id the dispatcher copied from the request. }
+      JSONResponse.Remove('result');
+      JSONResponse.Remove('error');
+      JSONResponse.S['jsonrpc'] := '2.0';
+      JSONResponse.O['error'].I['code'] := FProtoCode;
+      JSONResponse.O['error'].S['message'] := FProtoMessage;
+      if FProtoData <> nil then
+        JSONResponse.O['error'].O['data'] :=
+          TJDOJsonObject.Parse(FProtoData.ToJSON(False)) as TJDOJsonObject;
+    end;
+    Exit;
+  end;
+
+  if FHandler.Modern and Assigned(JSONResponse) then
+  begin
+    if JSONResponse.Contains('result') and (JSONResponse.Types['result'] = jdtObject) then
+      FHandler.DecorateResult(FMcpMethod, JSONResponse.O['result'])
+    else if JSONResponse.Contains('error') and
+            (JSONResponse.O['error'].I['code'] = -32601) then
+      { Unknown method: the spec tells it from a legacy server by the 404 and
+        this JSON-RPC body. }
+      Context.Response.StatusCode := 404;
   end;
 
   { Set session header on every response }
@@ -1007,6 +1156,11 @@ begin
   Result := FHandler.DoPing;
 end;
 
+function TMCPEndpoint.ServerDiscover: TJDOJsonObject;
+begin
+  Result := FHandler.DoServerDiscover;
+end;
+
 function TMCPEndpoint.ToolsList: TJDOJsonObject;
 begin
   Result := FHandler.DoToolsList;
@@ -1023,7 +1177,12 @@ begin
     if Arguments <> nil then
       LParams.O['arguments'] :=
         TJDOJsonObject.Parse(Arguments.ToJSON(False)) as TJDOJsonObject;
-    Result := FHandler.DoToolsCall(LParams);
+    try
+      Result := FHandler.DoToolsCall(LParams);
+    except
+      on E: EMCPProtocolError do
+        raise EMVCJSONRPCError.Create(E.Code, E.Message);
+    end;
   finally
     LParams.Free;
   end;
@@ -1047,7 +1206,12 @@ begin
   LParams := TJDOJsonObject.Create;
   try
     LParams.S['uri'] := URI;
-    Result := FHandler.DoResourcesRead(LParams);
+    try
+      Result := FHandler.DoResourcesRead(LParams);
+    except
+      on E: EMCPProtocolError do
+        raise EMVCJSONRPCError.Create(E.Code, E.Message);
+    end;
   finally
     LParams.Free;
   end;

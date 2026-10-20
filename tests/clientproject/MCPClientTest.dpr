@@ -32,6 +32,7 @@ uses
   System.SysUtils,
   System.Classes,
   System.JSON,
+  System.TypInfo,
   System.Generics.Collections,  // expand TJSONArray.GetValue inline calls
   MVCFramework.MCP.Client,
   MVCFramework.MCP.Client.Stdio;
@@ -136,6 +137,23 @@ begin
     end;
 end;
 
+// --era legacy (default) | modern | auto: which protocol era the client speaks.
+function ParseEra: TMCPProtocolEra;
+var
+  I: Integer;
+begin
+  Result := mpeLegacy;
+  for I := 1 to ParamCount do
+    if SameText(ParamStr(I), '--era') and (I < ParamCount) then
+    begin
+      if SameText(ParamStr(I + 1), 'modern') then
+        Result := mpeModern
+      else if SameText(ParamStr(I + 1), 'auto') then
+        Result := mpeAuto;
+      Exit;
+    end;
+end;
+
 // ──────────────────────────────────────────────────────────────────────────
 // Test cases
 // ──────────────────────────────────────────────────────────────────────────
@@ -145,9 +163,17 @@ begin
   AR.Section('Initialize');
   try
     AClient.Initialize;
+    if AClient.ActiveEra = mpeModern then
+    begin
+      // Stateless era: there is no session to capture.
+      if (AClient is TMCPClient) and (TMCPClient(AClient).SessionID <> '') then
+        AR.Fail('modern era', 'a session id was captured, the era has no sessions')
+      else
+        AR.Ok('server/discover completed, era = modern (no session)');
+    end
     // Session-id capture is HTTP-specific (transport header). For stdio
     // the handshake just has to not raise.
-    if AClient is TMCPClient then
+    else if AClient is TMCPClient then
     begin
       if TMCPClient(AClient).SessionID <> '' then
         AR.Ok(Format('handshake → session %s...',
@@ -566,12 +592,14 @@ begin
   LR := TTestRunner.Create;
   try
     LClient.ClientName := 'TMCPClientTest';
+    LClient.Era := ParseEra;
+    WriteLn('Era      : ', GetEnumName(TypeInfo(TMCPProtocolEra), Ord(LClient.Era)));
     try
       TestInitialize(LClient, LR);
 
       // For HTTP we gate the remaining tests on a captured session.
       // For stdio we just check Initialize did not raise (LR.Failed unchanged).
-      if LClient is TMCPClient then
+      if (LClient is TMCPClient) and (LClient.ActiveEra = mpeLegacy) then
         LCanRun := TMCPClient(LClient).SessionID <> ''
       else
         LCanRun := LR.Failed = 0;

@@ -242,6 +242,8 @@ type
     FBaseURL: string;
     FModel: string;
     FMCPURL: string;
+    FMCPEra: TMCPProtocolEra;
+    FMCPBearerToken: string;
     FMaxTurns: Integer;
     FSystemPrompt: string;
     FHTTPReferer: string;
@@ -307,6 +309,14 @@ type
     property BaseURL: string read FBaseURL write FBaseURL;
     property Model: string read FModel write FModel;
     property MCPURL: string read FMCPURL write FMCPURL;
+    // Protocol era of the client the agent creates itself (not of an injected
+    // one). Default mpeLegacy; mpeAuto tries 2026-07-28 and falls back.
+    property MCPEra: TMCPProtocolEra read FMCPEra write FMCPEra;
+    // Sent as "Authorization: Bearer" by the client the agent creates itself:
+    // the identity under which the tools run on the server. The agent talks to
+    // the MCP server as one user, so create one agent (or inject one client,
+    // SetMCPClient) per user, never share them.
+    property MCPBearerToken: string read FMCPBearerToken write FMCPBearerToken;
 
     // Hard cap on the number of LLM round-trips. Defaults to 25. Set lower
     // for predictable cost ceilings; set higher for long multi-step plans.
@@ -1140,6 +1150,8 @@ begin
   else
   begin
     LMCP := TMCPClient.Create(FMCPURL);
+    LMCP.Era := FMCPEra;
+    TMCPClient(LMCP).BearerToken := FMCPBearerToken;
     LOwnedHere := True;
   end;
   try

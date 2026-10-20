@@ -40,7 +40,17 @@
     notify    { "jsonrpc":"2.0",        "method":"notifications/initialized" }
   Notifications carry no "id" and receive no response.
 
-  -- Session lifecycle --
+  -- Two protocol eras --
+  Era = mpeLegacy (default): initialize handshake + Mcp-Session-Id, spec
+  2025-03-26. Era = mpeModern: stateless, spec 2026-07-28 - no initialize, no
+  session; every request carries the protocol version and the client
+  capabilities in params._meta (and, over HTTP, the MCP-Protocol-Version /
+  Mcp-Method / Mcp-Name headers); Initialize only calls server/discover to
+  check that the server speaks that version. Era = mpeAuto tries the modern
+  era first and falls back to the handshake when the server does not know it.
+  The default stays mpeLegacy so existing code is not affected.
+
+  -- Session lifecycle (legacy era) --
   The first response carries an `Mcp-Session-Id` header. The client memorizes
   it and replays it on every subsequent request so the server can correlate
   state across calls. DELETE on the endpoint destroys the session (not
@@ -68,6 +78,8 @@ uses
   System.Net.URLClient;
 
 type
+  TMCPProtocolEra = (mpeLegacy, mpeModern, mpeAuto);
+
   // Abstract MCP client base, shared across transports (HTTP, stdio, ...).
   // Sub-classes implement the actual wire protocol. The agent and any other
   // generic consumer should reference TMCPClientBase, not the concrete
@@ -78,7 +90,16 @@ type
     FClientName: string;
     FClientVersion: string;
     FRequestID: Integer;     // Monotonic counter for the JSON-RPC "id" field
+    FEra: TMCPProtocolEra;
+    FActiveEra: TMCPProtocolEra;  // never mpeAuto once Initialize has run
     function NextID: Integer;
+    // True when requests must carry the modern per-request metadata.
+    function ModernActive: Boolean;
+    // Adds params._meta (protocol version, client info, capabilities).
+    procedure AddModernMeta(AParams: TJSONObject);
+    // True for the error codes only a 2026-07-28 server emits: such a server
+    // is modern, so a client in mpeAuto must not fall back to initialize.
+    class function IsModernProtocolError(const AMessage: string): Boolean;
   public
     constructor Create; virtual;
 
@@ -99,6 +120,10 @@ type
     function ListPrompts: TJSONArray; virtual; abstract;
     function GetPrompt(const AName: string; AArguments: TJSONObject): TJSONArray; virtual; abstract;
 
+    // Which era to speak, see the unit header. Default mpeLegacy.
+    property Era: TMCPProtocolEra read FEra write FEra;
+    // The era in use after Initialize (mpeLegacy or mpeModern).
+    property ActiveEra: TMCPProtocolEra read FActiveEra;
     // Protocol version sent during initialize (defaults to MCP_PROTOCOL_VERSION).
     property ProtocolVersion: string read FProtocolVersion write FProtocolVersion;
     // clientInfo.name sent during initialize.
@@ -116,8 +141,11 @@ type
     FHTTP: THTTPClient;    // Reused for all calls
     FResponseTimeoutMs: Integer;
     FConnectionTimeoutMs: Integer;
+    FBearerToken: string;
 
-    function BuildHeaders: TNetHeaders;
+    function BuildHeaders(const AMethod, AName: string): TNetHeaders;
+    procedure InitializeLegacy;
+    procedure InitializeModern;
 
     // Performs a single JSON-RPC request. AParams is CONSUMED.
     // If ANotify=True the call returns immediately with no response object.
@@ -182,11 +210,17 @@ type
     property ResponseTimeoutMs: Integer read FResponseTimeoutMs write FResponseTimeoutMs;
     // Connection timeout (ms). Default 10000 — fail fast if the server is down.
     property ConnectionTimeoutMs: Integer read FConnectionTimeoutMs write FConnectionTimeoutMs;
+    // Sent as "Authorization: Bearer <token>" on every request. This is how a
+    // client says who it is to a server behind MCPGuard or a JWT middleware:
+    // the tools then see that user in Caller.UserName / Caller.Roles. One
+    // client per user (the agent can be given it with SetMCPClient).
+    property BearerToken: string read FBearerToken write FBearerToken;
   end;
 
 implementation
 
 uses
+  System.NetEncoding,
   MVCFramework.MCP.Types;
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -200,12 +234,39 @@ begin
   FClientName := 'MVCFramework.MCP.Client';
   FClientVersion := '1.0';
   FRequestID := 0;
+  FEra := mpeLegacy;
+  FActiveEra := mpeLegacy;
 end;
 
 function TMCPClientBase.NextID: Integer;
 begin
   Inc(FRequestID);
   Result := FRequestID;
+end;
+
+function TMCPClientBase.ModernActive: Boolean;
+begin
+  Result := FActiveEra = mpeModern;
+end;
+
+procedure TMCPClientBase.AddModernMeta(AParams: TJSONObject);
+var
+  LMeta, LInfo: TJSONObject;
+begin
+  LMeta := TJSONObject.Create;
+  LMeta.AddPair(MCP_META_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION_MODERN);
+  LInfo := TJSONObject.Create;
+  LInfo.AddPair('name', FClientName);
+  LInfo.AddPair('version', FClientVersion);
+  LMeta.AddPair(MCP_META_CLIENT_INFO, LInfo);
+  LMeta.AddPair(MCP_META_CLIENT_CAPABILITIES, TJSONObject.Create);
+  AParams.AddPair('_meta', LMeta);
+end;
+
+class function TMCPClientBase.IsModernProtocolError(const AMessage: string): Boolean;
+begin
+  Result := AMessage.Contains('-32020') or AMessage.Contains('-32021') or
+    AMessage.Contains('-32022');
 end;
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -235,7 +296,27 @@ end;
 // Private helpers
 // ──────────────────────────────────────────────────────────────────────────
 
-function TMCPClient.BuildHeaders: TNetHeaders;
+function TMCPClient.BuildHeaders(const AMethod, AName: string): TNetHeaders;
+
+  // Header values must be plain ASCII without edges spaces; anything else
+  // travels as =?base64?...?= (spec 2026-07-28, "Value Encoding").
+  function HeaderValue(const AValue: string): string;
+  var
+    I: Integer;
+    LPlain: Boolean;
+  begin
+    LPlain := (AValue = AValue.Trim) and
+      not (AValue.StartsWith('=?base64?') and AValue.EndsWith('?='));
+    for I := 1 to Length(AValue) do
+      if (AValue[I] < ' ') or (AValue[I] > '~') then
+        LPlain := False;
+    if LPlain then
+      Result := AValue
+    else
+      Result := '=?base64?' + TNetEncoding.Base64String.EncodeBytesToString(
+        TEncoding.UTF8.GetBytes(AValue)) + '?=';
+  end;
+
 begin
   // Content-Type: we always send JSON.
   // Accept: server may answer in plain JSON or in SSE — we accept either,
@@ -246,8 +327,20 @@ begin
     TNameValuePair.Create('Accept', 'application/json, text/event-stream')
   ];
 
-  // Replay the session id on every subsequent request.
-  if FSessionID <> '' then
+  if FBearerToken <> '' then
+    Result := Result + [TNameValuePair.Create('Authorization', 'Bearer ' + FBearerToken)];
+
+  if ModernActive then
+  begin
+    // Stateless era: no session, the routing headers mirror the body.
+    Result := Result + [
+      TNameValuePair.Create('MCP-Protocol-Version', MCP_PROTOCOL_VERSION_MODERN),
+      TNameValuePair.Create('Mcp-Method', AMethod)];
+    if AName <> '' then
+      Result := Result + [TNameValuePair.Create('Mcp-Name', HeaderValue(AName))];
+  end
+  else if FSessionID <> '' then
+    // Legacy era: replay the session id on every subsequent request.
     Result := Result + [TNameValuePair.Create('Mcp-Session-Id', FSessionID)];
 end;
 
@@ -261,10 +354,24 @@ var
   LBody: TJSONObject;
   LStream: TStringStream;
   LResp: IHTTPResponse;
-  LSID, LRespBody: string;
+  LSID, LRespBody, LName: string;
   LValue: TJSONValue;
 begin
   Result := nil;
+
+  // Modern era: every request carries its own version and capabilities, and
+  // the name the routing header mirrors is read before the params are moved.
+  LName := '';
+  if ModernActive and not ANotify then
+  begin
+    if not Assigned(AParams) then
+      AParams := TJSONObject.Create;
+    if SameText(AMethod, 'tools/call') or SameText(AMethod, 'prompts/get') then
+      LName := AParams.GetValue<string>('name', '')
+    else if SameText(AMethod, 'resources/read') then
+      LName := AParams.GetValue<string>('uri', '');
+    AddModernMeta(AParams);
+  end;
 
   // 1) Build the JSON-RPC payload.
   LBody := TJSONObject.Create;
@@ -288,7 +395,7 @@ begin
     // 2) Synchronous POST.
     LStream := TStringStream.Create(LBody.ToJSON, TEncoding.UTF8);
     try
-      LResp := FHTTP.Post(FURL, LStream, nil, BuildHeaders);
+      LResp := FHTTP.Post(FURL, LStream, nil, BuildHeaders(AMethod, LName));
     finally
       LStream.Free;
     end;
@@ -303,10 +410,14 @@ begin
       [LResp.StatusCode, AMethod,
        Copy(LResp.ContentAsString, 1, 400)]);
 
-  // 4) Capture the session id (if this is the first response).
-  LSID := LResp.HeaderValue['mcp-session-id'];
-  if LSID <> '' then
-    FSessionID := LSID;
+  // 4) Capture the session id (if this is the first response). The modern
+  // era has no sessions: a header sent anyway is ignored.
+  if not ModernActive then
+  begin
+    LSID := LResp.HeaderValue['mcp-session-id'];
+    if LSID <> '' then
+      FSessionID := LSID;
+  end;
 
   // Notifications don't carry a meaningful body.
   if ANotify then
@@ -357,6 +468,73 @@ end;
 // ──────────────────────────────────────────────────────────────────────────
 
 procedure TMCPClient.Initialize;
+begin
+  case FEra of
+    mpeLegacy:
+      begin
+        FActiveEra := mpeLegacy;
+        InitializeLegacy;
+      end;
+    mpeModern:
+      InitializeModern;
+  else
+    try
+      InitializeModern;
+    except
+      on E: Exception do
+      begin
+        // A modern error means a modern server that refuses this request:
+        // falling back would hide the cause. Anything else is a server that
+        // does not know the era (404/405, session error): use the handshake.
+        if IsModernProtocolError(E.Message) then
+          raise;
+        FActiveEra := mpeLegacy;
+        InitializeLegacy;
+      end;
+    end;
+  end;
+end;
+
+// Modern era: nothing to negotiate. server/discover tells whether the server
+// speaks 2026-07-28; calling it is optional in the spec, but it is the only
+// way to fail now, with a clear message, instead of on the first tool call.
+procedure TMCPClient.InitializeModern;
+var
+  LResp, LResult: TJSONObject;
+  LVersions: TJSONArray;
+  LOK: Boolean;
+  I: Integer;
+begin
+  FActiveEra := mpeModern;
+  try
+    LResp := RPC('server/discover', TJSONObject.Create);
+    try
+      LOK := False;
+      if Assigned(LResp) then
+      begin
+        LResult := LResp.GetValue('result') as TJSONObject;
+        if Assigned(LResult) then
+        begin
+          LVersions := LResult.GetValue('supportedVersions') as TJSONArray;
+          if Assigned(LVersions) then
+            for I := 0 to LVersions.Count - 1 do
+              if LVersions.Items[I].Value = MCP_PROTOCOL_VERSION_MODERN then
+                LOK := True;
+        end;
+      end;
+      if not LOK then
+        raise Exception.Create('MCP server does not list protocol version ' +
+          MCP_PROTOCOL_VERSION_MODERN + ' in server/discover');
+    finally
+      LResp.Free;
+    end;
+  except
+    FActiveEra := mpeLegacy;
+    raise;
+  end;
+end;
+
+procedure TMCPClient.InitializeLegacy;
 var
   LParams, LCaps, LInfo: TJSONObject;
   LResp: TJSONObject;

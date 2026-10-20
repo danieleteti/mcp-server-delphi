@@ -503,6 +503,53 @@ def test_jwt_in_front_of_mcp(exe: str, r: Result):
         r.check("DELETE without token: 401 (from the middleware)", resp.status_code == 401, f"HTTP {resp.status_code}")
 
 
+def modern_call(method: str, params: dict = None, headers: dict = None) -> requests.Response:
+    """A 2026-07-28 request: no session, version and capabilities in _meta,
+    routing headers mirroring the body."""
+    p = dict(params or {})
+    p["_meta"] = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                  "io.modelcontextprotocol/clientCapabilities": {}}
+    h = {"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method}
+    if method == "tools/call":
+        h["Mcp-Name"] = p["name"]
+    h.update(headers or {})
+    return rpc(method, p, headers=h)
+
+
+def test_modern_era_identity(exe: str, r: Result):
+    print("\n--- 2026-07-28 era: authentication is not bypassed, identity reaches the tools ---")
+    with Server(exe, "--auth-token", TOKEN, ready_headers=AUTH):
+        resp = modern_call("tools/list")
+        r.check("token: a modern request with no token is refused", resp.status_code == 401,
+                f"HTTP {resp.status_code} {resp.text[:120]}")
+        resp = modern_call("tools/list", headers={"Authorization": "Bearer wrong-token"})
+        r.check("token: a modern request with a wrong token is refused", resp.status_code == 401,
+                f"HTTP {resp.status_code}")
+        resp = modern_call("tools/call", {"name": "whoami", "arguments": {}}, headers=AUTH)
+        r.check("token: a modern request sees the token name", tool_text(resp) == "http|test-client|",
+                resp.text[:160])
+        resp = modern_call("tools/list", headers=AUTH)
+        r.check("token: the list is cacheable only privately for an authenticated caller",
+                resp.json()["result"].get("cacheScope") == "private", resp.text[:200])
+    with Server(exe, "--jwt"):
+        base = f"http://localhost:{PORT}"
+        resp = modern_call("tools/list")
+        r.check("JWT: a modern request with no JWT is refused", resp.status_code == 401, f"HTTP {resp.status_code}")
+        login = requests.post(base + "/login", headers={"jwtusername": "alice", "jwtpassword": "wonderland"})
+        if login.status_code != 200:
+            r.fail("JWT login", login.text[:160])
+            return
+        jwt = {"Authorization": "Bearer " + login.json()["token"]}
+        resp = modern_call("tools/call", {"name": "whoami", "arguments": {}}, headers=jwt)
+        r.check("JWT: a modern request sees user and roles", tool_text(resp) == "http|alice|operator", resp.text[:160])
+    with Server(exe):
+        resp = modern_call("tools/call", {"name": "whoami", "arguments": {}})
+        r.check("no authentication: a modern request has an empty user", tool_text(resp) == "http||", resp.text[:160])
+        resp = modern_call("tools/list")
+        r.check("no authentication: the list is public", resp.json()["result"].get("cacheScope") == "public",
+                resp.text[:200])
+
+
 def test_guard_option_errors(exe: str, r: Result):
     print("\n--- Guard: options that can never work are refused at startup ---")
     for label, flags in [("a token with leading whitespace", ["--auth-token", "alice= padded-token-0123"]),
@@ -607,6 +654,7 @@ GROUPS = [test_bridge_never_exposes_internal_controllers, test_bridge_filters,
           test_guard_request_target_variants, test_guard_identity_and_names,
           test_guard_hosts_and_auth_elsewhere, test_endpoint_fails_closed,
           test_guard_leaves_other_paths_alone, test_caller, test_jwt_in_front_of_mcp,
+          test_modern_era_identity,
           test_jwt_handler_that_requires_nothing, test_guard_option_errors,
           test_bridge_concurrent_registration, test_jwt_without_iat_claim]
 

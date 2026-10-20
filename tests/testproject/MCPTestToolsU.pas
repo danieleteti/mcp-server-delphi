@@ -46,6 +46,10 @@ type
     ): TMCPToolResult;
 
     [MCPTool('echo', 'Echoes back the input message')]
+    [MCPToolTitle('Echo')]
+    [MCPReadOnly]
+    [MCPIdempotent]
+    [MCPClosedWorld]
     function Echo(
       [MCPParam('The message to echo')] const Message: string
     ): TMCPToolResult;
